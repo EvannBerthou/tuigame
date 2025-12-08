@@ -1,0 +1,5 @@
+.cache
+.clang-format
+.exrc
+build
+compile_commands.json

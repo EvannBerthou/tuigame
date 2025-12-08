@@ -1,0 +1,23 @@
+3
+---
+hostname: machine1
+ip: 192.168.1.96
+network: 0
+files: 
+- /test/:
+- /abc:1\n2\n3\n4\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\n
+- /test/sub/:
+- /test/sub/encoresub/:
+- /test/sub/encoresub/fichier:
+---
+hostname: machine3
+ip: 192.168.1.200
+network: 1
+files: 
+- /fichier:Je suis un fichier\n
+---
+hostname: machine2
+ip: 192.168.1.100
+network: 0 1
+files: 
+- /fichier:Je suis un fichier\n
