@@ -11,7 +11,7 @@ files:
 - /test/sub/encoresub/fichier:
 ---
 hostname: machine3
-ip: 192.168.1.200
+ip: 10.0.0.1
 network: 1
 files: 
 - /fichier:Je suis un fichier\n

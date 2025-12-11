@@ -23,10 +23,16 @@ typedef struct {
 #define NETSCAN_SCAN_TIME (1.f / 60.f)
 
 typedef struct {
-    const char *network;
+    const char *scanning_network_ip;
     int current_progress;
     float scantime_left;
+    bool found[256];
 } netscan_process;
+
+typedef struct {
+    int selected_index;
+    int offset;
+} help_process;
 
 #define MAX_INPUT_LENGTH 40
 #define MAX_LINE_COUNT_PER_SCREEN 21
@@ -270,6 +276,15 @@ typedef struct {
     process_render render;
 } command;
 
+// TODO: Command ideas:
+//   iv -> Image viewer
+//   rm/mv -> file manipulation
+//   script ? -> Scripting language
+
+// TODO: Command improvements
+//   ls -> Add date
+//   edit -> Search
+
 #define COMMANDS       \
     XI(list, "ls")     \
     XI(cd, NULL)       \
@@ -283,6 +298,7 @@ typedef struct {
     XI(clear, NULL)    \
     XIU(ping, NULL)    \
     XIUR(edit, NULL)   \
+    XIUR(help, NULL)   \
     XIU(netscan, "ns")
 
 #define XI(n, a) int n##_init(terminal *term, int argc, const char **argv);
@@ -304,13 +320,53 @@ command commands[] = {
 #undef XIU
 #undef XIUR
 };
+
+typedef struct {
+    const char *name;
+    const char *text;
+} command_help_pair;
+
+#include "commands.h"
+#define X(n) (command_help_pair){#n, n##_help},
+#define XI(n, a) X(n)
+#define XIU(n, a) X(n)
+#define XIUR(n, a) X(n)
+command_help_pair commands_help[] = {COMMANDS};
+#undef X
+#undef XI
+#undef XIU
+#undef XIUR
+
 const size_t command_count = sizeof(commands) / sizeof(commands[0]);
+
+const char *get_command_help(const char *cmd) {
+    for (size_t i = 0; i < command_count; i++) {
+        if (strcmp(cmd, commands_help[i].name) == 0) {
+            return (const char *)commands_help[i].text;
+        }
+    }
+    return "No help page found";
+}
+
+int get_command_id(const char *cmd) {
+    for (size_t i = 0; i < command_count; i++) {
+        if (strcmp(cmd, commands[i].name) == 0) {
+            return i;
+        }
+        if (commands[i].alias != NULL && strcmp(cmd, commands[i].alias) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+#define NETWORK_MAX_NODE_COUNT 8
 
 typedef struct {
     struct {
         const char *ip;
         terminal *term;
-    } nodes[8];
+    } nodes[NETWORK_MAX_NODE_COUNT];
     int node_count;
 } network;
 
@@ -359,17 +415,19 @@ bool is_ip_format(const char *s) {
 }
 
 const char *machine_ip_to_network(const char *ip) {
-    int ip_len = strlen(ip);
-    char *result = malloc(ip_len + 1);
-    result[ip_len] = '\0';
-    strncpy(result, ip, ip_len);
-    char *end = result + ip_len - 1;
-    while (*end != '.') {
-        end--;
-    }
-    end[1] = '0';
-    end[2] = '\0';
+    int ip_len = strlen(ip) + 1;
+    char *result = malloc(ip_len);
+    snprintf(result, ip_len, "%.*s0", (int)(strrchr(ip, '.') - ip + 1), ip);
     return result;
+}
+
+const char *network_ip_get_machine(const char *network, int machine) {
+    static char ip[17] = {0};
+    if (machine < 0 || machine > 255) {
+        return NULL;
+    }
+    snprintf(ip, sizeof(ip), "%.*s%d", (int)(strrchr(network, '.') - network + 1), network, machine);
+    return ip;
 }
 
 bool network_append_machine(network *net, terminal *term) {
@@ -399,6 +457,17 @@ terminal *network_get_terminal(network *net, const char *ip) {
         }
     }
     return NULL;
+}
+
+bool ip_is_reachable(terminal *from, const char *ip) {
+    for (int i = 0; i < MAX_NETWORK_COUNT; i++) {
+        terminal *me = network_get_terminal(&networks[i], from->ip);
+        terminal *to = network_get_terminal(&networks[i], ip);
+        if (me != NULL && to != NULL) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void DrawTerminalLine(const char *text, int line) {
@@ -836,7 +905,7 @@ int netscan_init(terminal *term, int argc, const char **argv) {
     terminal_append_log(term, TextFormat("Scanning network : %s", network_ip));
     netscan_process *p = malloc(sizeof(*p));
     assert(p);
-    p->network = network_ip;
+    p->scanning_network_ip = network_ip;
     p->current_progress = 0;
     p->scantime_left = NETSCAN_SCAN_TIME;
     term->args = p;
@@ -844,13 +913,19 @@ int netscan_init(terminal *term, int argc, const char **argv) {
 }
 
 int netscan_update(terminal *term, void *args) {
+    netscan_process *p = (netscan_process *)args;
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_C)) {
+        free((void *)p->scanning_network_ip);
         return 1;
     }
-    (void)term;
-    netscan_process *p = (netscan_process *)args;
     if (p->current_progress == 255) {
-        free((void *)p->network);
+        for (int i = 0; i < 255; i++) {
+            if (p->found[i]) {
+                const char *ip = network_ip_get_machine(p->scanning_network_ip, i);
+                terminal_append_log(term, TextFormat("Machine %s is reachable", ip));
+            }
+        }
+        free((void *)p->scanning_network_ip);
         return 1;
     }
     p->scantime_left -= GetFrameTime();
@@ -858,8 +933,10 @@ int netscan_update(terminal *term, void *args) {
         p->current_progress++;
         p->scantime_left = NETSCAN_SCAN_TIME;
     }
-    term->title = TextFormat("Netscan %s", p->network);
-    terminal_replace_last_line(term, TextFormat("Scanning %s: %d/255\n", p->network, p->current_progress));
+    term->title = TextFormat("Netscan %s", p->scanning_network_ip);
+    const char *scanning_machine_ip = network_ip_get_machine(p->scanning_network_ip, p->current_progress);
+    terminal_replace_last_line(term, TextFormat("Scanning %s\n", scanning_machine_ip));
+    p->found[p->current_progress] = ip_is_reachable(term, scanning_machine_ip);
     return 0;
 }
 
@@ -1144,6 +1221,69 @@ int ping_init(terminal *term, int argc, const char **argv) {
     return 0;
 }
 
+int help_init(terminal *term, int argc, const char **argv) {
+    int default_selected = 0;
+    if (argc >= 2) {
+        const char *asked_command = argv[1];
+        default_selected = get_command_id(asked_command);
+        if (default_selected == -1) {
+            terminal_append_log(term, TextFormat("Unknown command : %s", asked_command));
+            return 1;
+        }
+    }
+
+    help_process *p = malloc(sizeof(*p));
+    p->selected_index = default_selected;
+    p->offset = fmin(default_selected, command_count - 10);
+    term->args = p;
+    return 0;
+}
+
+int help_update(terminal *term, void *args) {
+    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_A)) {
+        return 1;
+    }
+    help_process *p = (help_process *)args;
+    term->title = TextFormat("Help : %s", commands[p->selected_index].name);
+    if (IsKeyPressed(KEY_DOWN) || IsKeyPressedRepeat(KEY_DOWN)) {
+        p->selected_index = fmin(p->selected_index + 1, command_count - 1);
+        if (p->selected_index - p->offset >= 10) {
+            p->offset = fmin(p->offset + 1, command_count - 10);
+        }
+    }
+    if (IsKeyPressed(KEY_UP) || IsKeyPressedRepeat(KEY_UP)) {
+        p->selected_index = fmax(p->selected_index - 1, 0);
+        if (p->selected_index == p->offset - 1) {
+            p->offset = fmax(p->offset - 1, 0);
+        }
+    }
+    return 0;
+}
+
+void help_render(terminal *term, void *args) {
+    (void)term;
+    help_process *p = (help_process *)args;
+
+    // Layout
+    const int split_position = WIDTH * 0.35;
+    DrawRectangle(split_position, 60, 15, HEIGHT, WHITE);
+
+    // Doc render
+    for (size_t i = p->offset, j = 0; i < command_count; i++, j++) {
+        command *c = &commands[i];
+        Color text_color = (int)i == p->selected_index ? BLACK : WHITE;
+        if ((int)i == p->selected_index) {
+            DrawRectangle(0, 60 + 60 * j, split_position, 60, WHITE);
+        } else {
+            DrawRectangle(0, 120 + 60 * j, split_position, 8, WHITE);
+        }
+        DrawTextEx(terminal_font, c->name, (Vector2){60, 80 + 60 * j}, font_size, 1, text_color);
+    }
+    command *selected_command = &commands[p->selected_index];
+    DrawTextEx(terminal_font, get_command_help(selected_command->name), (Vector2){split_position + 20, 80}, font_size,
+               1, WHITE);
+}
+
 void terminal_handle_command(terminal *term) {
     term->history_ptr = 0;
     int argc = 0;
@@ -1176,12 +1316,13 @@ void terminal_handle_command(terminal *term) {
             term->process_render = c->render;
         }
     } else {
+        // TODO: Implement terminal_log_append_text or something
         if (strcmp(argv[0], "echo") == 0) {
             if (argc >= 2) {
                 terminal_append_log(term, input + strlen("echo "));
             }
         } else {
-            terminal_append_log(term, "Unknown command");
+            terminal_append_log(term, TextFormat("Unknown command : %s", argv[0]));
         }
     }
 }
@@ -1200,6 +1341,7 @@ const char *terminal_autocomplete_command(const char *input) {
     return completed_command;
 }
 
+// TODO: Cycling on TAB
 const char *terminal_autocomplete_file(file_node *root, const char *path) {
     file_node *node = get_parent_from_path(root, path);
     if (node == NULL) {
