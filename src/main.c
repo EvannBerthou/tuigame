@@ -100,6 +100,10 @@ file_node *find_node_in_dir(file_node *root, const char *filename) {
         return root->parent;
     }
 
+    if (strcmp(filename, ".") == 0) {
+        return root;
+    }
+
     for (int i = 0; i < root->children_count; i++) {
         if (strcmp(filename, root->children[i]->name) == 0) {
             return root->children[i];
@@ -734,6 +738,7 @@ int edit_line_offset_prev(edit_line *first, edit_line *line) {
     return i - 1;
 }
 
+//TODO: Some garbage values sometimes
 void edit_insert_new_line(edit_process *p) {
     const char *cut =
         TextFormat("%.*s", p->selected_line->length - p->cursor_col, p->selected_line->content + p->cursor_col);
@@ -1061,16 +1066,33 @@ void mail_render(terminal *term, void *args) {
 int list_init(terminal *term, int argc, const char **argv) {
     file_node *root = active_term->fs.pwd;
     if (argc == 2) {
-        root = look_up_node(root, argv[0]);
+        root = look_up_node(root, argv[1]);
     } else if (argc > 2) {
         terminal_append_log(term, "list (path)");
         return 1;
     }
+    if (root == NULL) {
+        terminal_append_log(term, TextFormat("Unknown file : %s", argv[1]));
+        return 1;
+    }
+    terminal_append_log(term, "Type Name             Size");
+    terminal_append_log(term, "-----------------------------------");
+
+    if (root->folder == false) {
+        const char *str = TextFormat("f    %-16s %-4d bytes", root->name, strlen(root->content));
+        terminal_append_log(term, str);
+        return 0;
+    }
+
     for (int i = 0; i < root->children_count; i++) {
         file_node *node = root->children[i];
-        const char *prefix = node->folder ? "d" : "f";
-        const char *str = TextFormat("%s %s", prefix, node->name);
-        terminal_append_log(term, str);
+        if (node->folder) {
+            const char *str = TextFormat("d    %-16s %-4d children", node->name, node->children_count);
+            terminal_append_log(term, str);
+        } else {
+            const char *str = TextFormat("f    %-16s %-4d bytes", node->name, strlen(node->content));
+            terminal_append_log(term, str);
+        }
     }
     return 0;
 }
@@ -1126,13 +1148,21 @@ int path_init(terminal *term, int argc, const char **argv) {
         return 1;
     }
     file_node *node = look_up_node(term->fs.pwd, argv[1]);
-    terminal_append_log(term, get_file_full_path(node));
+    if (node) {
+        terminal_append_log(term, get_file_full_path(node));
+    } else {
+        terminal_append_log(term, TextFormat("Unknown file %s", argv[1]));
+    }
     return 0;
 }
 
 int create_init(terminal *term, int argc, const char **argv) {
     if (argc != 3) {
         terminal_append_log(term, "create (d|f) <path>");
+        return 1;
+    }
+    if (look_up_node(term->fs.pwd, argv[2]) != NULL) {
+        terminal_append_log(term, TextFormat("Path %s already exists", argv[2]));
         return 1;
     }
     if (strcmp(argv[1], "d") == 0) {
