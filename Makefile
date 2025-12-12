@@ -1,11 +1,12 @@
+CC=clang
+CFLAGS=-Wall -Wextra -Werror -Warray-bounds -Wno-initializer-overrides -std=c23 -pedantic
+
 all: build/main_game
 
 $(shell mkdir -p build)
 
 build/main_game: machines_builder build_docs src/main.c
-	gcc -Wall -Wextra -Warray-bounds -Wno-override-init-side-effects -Wno-initializer-overrides \
-		src/main.c -o build/main_game \
-		-I./include -L ./lib/linux -lraylib -lm -ggdb
+	$(CC) $(CFLAGS) src/main.c -o build/main_game -I./include -L ./lib/linux -lraylib -lm -ggdb
 
 build_docs:
 	sh tools/build_help_pages.sh
@@ -19,4 +20,7 @@ run: build/main_game
 clean:
 	-rm -rf build
 
-.PHONY: all run clean machines_builder build_docs
+analysis:
+	cppcheck --std=c23 --suppress=missingIncludeSystem --suppress=staticFunction --check-level=exhaustive src/main.c
+
+.PHONY: all run clean machines_builder build_docs analysis

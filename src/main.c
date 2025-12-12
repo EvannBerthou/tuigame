@@ -211,9 +211,8 @@ file_node *get_parent_from_path(file_node *root, const char *path) {
     }
 
     int offset = 0;
-    int folder_length = 0;
     do {
-        folder_length = TextFindIndex(local_str + offset, "/");
+        int folder_length = TextFindIndex(local_str + offset, "/");
         if (folder_length == -1) {
             break;
         }
@@ -251,6 +250,7 @@ struct terminal {
     int log_capacity;
     int log_count;
 
+    // TODO: Cursor mouvements
     char input[MAX_INPUT_LENGTH + 1];
     int input_cursor;
 
@@ -294,6 +294,7 @@ typedef struct {
     XI(cd, NULL)       \
     XI(print, NULL)    \
     XI(path, NULL)     \
+    XI(pwd, NULL)      \
     XI(create, NULL)   \
     XI(connect, NULL)  \
     XI(hostname, NULL) \
@@ -316,7 +317,7 @@ COMMANDS
 #undef XIUR
 
 command commands[] = {
-#define XI(n, a, ...) (command){.name = #n, .alias = a, .init = n##_init, __VA_ARGS__},
+#define XI(n, a, ...) {.name = #n, .alias = a, .init = n##_init, __VA_ARGS__},
 #define XIU(n, a, ...) XI(n, a, .update = n##_update, __VA_ARGS__)
 #define XIUR(n, a) XIU(n, a, .render = n##_render)
     COMMANDS
@@ -331,7 +332,7 @@ typedef struct {
 } command_help_pair;
 
 #include "commands.h"
-#define X(n) (command_help_pair){#n, n##_help},
+#define X(n) {#n, n##_help},
 #define XI(n, a) X(n)
 #define XIU(n, a) X(n)
 #define XIUR(n, a) X(n)
@@ -378,6 +379,9 @@ typedef struct {
 network networks[MAX_NETWORK_COUNT] = {0};
 
 bool is_ip_format(const char *s) {
+    if (s == NULL) {
+        return false;
+    }
     int dots = 0;
     int num = 0;
     int digits = 0;
@@ -421,6 +425,7 @@ bool is_ip_format(const char *s) {
 const char *machine_ip_to_network(const char *ip) {
     int ip_len = strlen(ip) + 1;
     char *result = malloc(ip_len);
+    assert(result != NULL);
     snprintf(result, ip_len, "%.*s0", (int)(strrchr(ip, '.') - ip + 1), ip);
     return result;
 }
@@ -463,10 +468,10 @@ terminal *network_get_terminal(network *net, const char *ip) {
     return NULL;
 }
 
-bool ip_is_reachable(terminal *from, const char *ip) {
+bool ip_is_reachable(const terminal *from, const char *ip) {
     for (int i = 0; i < MAX_NETWORK_COUNT; i++) {
-        terminal *me = network_get_terminal(&networks[i], from->ip);
-        terminal *to = network_get_terminal(&networks[i], ip);
+        const terminal *me = network_get_terminal(&networks[i], from->ip);
+        const terminal *to = network_get_terminal(&networks[i], ip);
         if (me != NULL && to != NULL) {
             return true;
         }
@@ -514,7 +519,7 @@ void terminal_append_input(terminal *term) {
     term->input_cursor = 0;
 }
 
-void terminal_render(terminal *term) {
+void terminal_render(const terminal *term) {
     for (int i = term->offset; i < term->log_count; i++) {
         DrawTerminalLine(term->logs[i], i - term->offset);
     }
@@ -536,7 +541,7 @@ int ping_update(terminal *term, void *args) {
     term->title = TextFormat("Ping : %s", p->ip);
     p->remaining_time -= GetFrameTime();
     if (p->remaining_time <= 0) {
-        terminal *other = network_get_terminal(&networks[0], p->ip);
+        const terminal *other = network_get_terminal(&networks[0], p->ip);
         if (other) {
             terminal_append_log(term, TextFormat("Machine %s online", p->ip));
         } else {
@@ -592,6 +597,7 @@ int edit_first_frame = true;
 
 edit_line *edit_create_line(const char *content) {
     edit_line *line = malloc(sizeof(edit_line));
+    assert(line != NULL);
     line->length = strlen(content);
     int capacity = next_power_of_two(line->length);
     if (capacity < 16) {
@@ -696,7 +702,7 @@ void edit_save_file(edit_process *p) {
     int write_idx = 0;
     line = p->root;
     while (line) {
-        strncpy((void *)p->node->content + write_idx, line->content, line->length + 1);
+        strncpy((void *)(p->node->content + write_idx), line->content, line->length + 1);
         write_idx += line->length;
         p->node->content[write_idx] = '\n';
         write_idx++;
@@ -708,7 +714,8 @@ void edit_save_file(edit_process *p) {
 }
 
 void edit_remove_char_at_cursor(edit_process *p) {
-    if (p->cursor_col == 0) {
+    int col = fmin(p->cursor_col, p->selected_line->length);
+    if (col == 0) {
         if (edit_append_line(p, p->selected_line->content)) {
             edit_line *prev = p->selected_line->prev;
             prev->next = p->selected_line->next;
@@ -722,13 +729,13 @@ void edit_remove_char_at_cursor(edit_process *p) {
         return;
     }
     edit_line *line = p->selected_line;
-    memmove(line->content + p->cursor_col - 1, line->content + p->cursor_col, line->length - p->cursor_col);
+    memmove(line->content + col - 1, line->content + col, line->length - col);
     line->length--;
     line->content[line->length] = '\0';
-    p->cursor_col--;
+    p->cursor_col = fmin(p->cursor_col - 1, col - 1);
 }
 
-int edit_line_offset_prev(edit_line *first, edit_line *line) {
+int edit_line_offset_prev(const edit_line *first, edit_line *line) {
     int i = 0;
     while (line && line != first) {
         i++;
@@ -738,10 +745,10 @@ int edit_line_offset_prev(edit_line *first, edit_line *line) {
     return i - 1;
 }
 
-//TODO: Some garbage values sometimes
+// TODO: Some garbage values sometimes
 void edit_insert_new_line(edit_process *p) {
-    const char *cut =
-        TextFormat("%.*s", p->selected_line->length - p->cursor_col, p->selected_line->content + p->cursor_col);
+    int col = fmin(p->cursor_col, p->selected_line->length);
+    const char *cut = TextFormat("%.*s", p->selected_line->length - col, p->selected_line->content + col);
     p->selected_line->length = p->cursor_col;
     p->selected_line->content[p->cursor_col] = '\0';
     edit_line *new_line = edit_create_line(cut);
@@ -1017,7 +1024,7 @@ void mail_render(terminal *term, void *args) {
 
     // Mailbox
     for (int i = 0; i < mail_count; i++) {
-        mail *m = &mails[mail_count - i - 1];
+        const mail *m = &mails[mail_count - i - 1];
         if (i == selected_mail_idx) {
             DrawRectangle(0, 60 + 60 * i, split_position, 60, WHITE);
         } else {
@@ -1156,6 +1163,13 @@ int path_init(terminal *term, int argc, const char **argv) {
     return 0;
 }
 
+int pwd_init(terminal *term, int argc, const char **argv) {
+    (void)argc;
+    (void)argv;
+    terminal_append_log(term, get_file_full_path(term->fs.pwd));
+    return 0;
+}
+
 int create_init(terminal *term, int argc, const char **argv) {
     if (argc != 3) {
         terminal_append_log(term, "create (d|f) <path>");
@@ -1165,8 +1179,9 @@ int create_init(terminal *term, int argc, const char **argv) {
         terminal_append_log(term, TextFormat("Path %s already exists", argv[2]));
         return 1;
     }
+    // TODO: Don't use argv[2] directly because it allows naming files "a/b"
     if (strcmp(argv[1], "d") == 0) {
-        file_node_append_children(term->fs.root, folder_new(argv[2]));
+        file_node_append_children(term->fs.pwd, folder_new(argv[2]));
     } else if (strcmp(argv[1], "f") == 0) {
         file_node_append_children(term->fs.pwd, file_new(argv[2], ""));
     } else {
@@ -1186,7 +1201,7 @@ int connect_init(terminal *term, int argc, const char **argv) {
     terminal *other = NULL;
     for (int i = 0; i < MAX_NETWORK_COUNT; i++) {
         other = network_get_terminal(&networks[i], ip);
-        terminal *me = network_get_terminal(&networks[i], active_term->ip);
+        const terminal *me = network_get_terminal(&networks[i], active_term->ip);
         if (other != NULL && me != NULL) {
             found = true;
             break;
@@ -1244,6 +1259,7 @@ int ping_init(terminal *term, int argc, const char **argv) {
     }
     term->process_update = &ping_update;
     ping_process *p = malloc(sizeof(ping_process));
+    assert(p != NULL);
     p->remaning_count = 4;
     p->remaining_time = 1;
     p->ip = strdup(ip);
@@ -1263,6 +1279,7 @@ int help_init(terminal *term, int argc, const char **argv) {
     }
 
     help_process *p = malloc(sizeof(*p));
+    assert(p != NULL);
     p->selected_index = default_selected;
     p->offset = fmin(default_selected, command_count - 10);
     term->args = p;
@@ -1292,7 +1309,7 @@ int help_update(terminal *term, void *args) {
 
 void help_render(terminal *term, void *args) {
     (void)term;
-    help_process *p = (help_process *)args;
+    const help_process *p = (help_process *)args;
 
     // Layout
     const int split_position = WIDTH * 0.35;
@@ -1300,7 +1317,7 @@ void help_render(terminal *term, void *args) {
 
     // Doc render
     for (size_t i = p->offset, j = 0; i < command_count; i++, j++) {
-        command *c = &commands[i];
+        const command *c = &commands[i];
         Color text_color = (int)i == p->selected_index ? BLACK : WHITE;
         if ((int)i == p->selected_index) {
             DrawRectangle(0, 60 + 60 * j, split_position, 60, WHITE);
@@ -1309,7 +1326,7 @@ void help_render(terminal *term, void *args) {
         }
         DrawTextEx(terminal_font, c->name, (Vector2){60, 80 + 60 * j}, font_size, 1, text_color);
     }
-    command *selected_command = &commands[p->selected_index];
+    const command *selected_command = &commands[p->selected_index];
     DrawTextEx(terminal_font, get_command_help(selected_command->name), (Vector2){split_position + 20, 80}, font_size,
                1, WHITE);
 }
@@ -1508,6 +1525,39 @@ void load_machines() {
     }
 }
 
+typedef struct {
+    const char *content;
+    int waiting_time;
+} bootup_sequence_line;
+
+bootup_sequence_line bootup_sequence[] = {{"...", 1000}, {"Starting system", 2000}};
+const int bootup_sequence_count = sizeof(bootup_sequence) / sizeof(bootup_sequence[0]);
+
+int bootup_sequence_idx = -1;
+float bootup_sequence_line_time_left = 3000;
+
+int bootup_sequence_update(terminal *term, void *args) {
+    (void)args;
+    term->title = "Booting";
+    bootup_sequence_line_time_left -= GetFrameTime() * 1000;
+    if (bootup_sequence_line_time_left < 0) {
+        bootup_sequence_idx++;
+        if (bootup_sequence_idx == bootup_sequence_count) {
+            return 1;
+        }
+        bootup_sequence_line_time_left = bootup_sequence[bootup_sequence_idx].waiting_time;
+    }
+    return 0;
+}
+
+void bootup_sequence_render(terminal *term, void *args) {
+    (void)term;
+    (void)args;
+    for (int i = 0; i <= bootup_sequence_idx; i++) {
+        DrawTerminalLine(bootup_sequence[i].content, i);
+    }
+}
+
 int main() {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(WIDTH, HEIGHT, "TUIGame");
@@ -1527,14 +1577,18 @@ int main() {
     load_machines();
 
     active_term = &all_terminals[0];
+    active_term->process_update = bootup_sequence_update;
+    active_term->process_render = bootup_sequence_render;
 
     while (!WindowShouldClose()) {
         if (active_term->process_update == NULL) {
             int key = 0;
-            while ((key = GetCharPressed()) != 0) {
-                if (active_term->input_cursor < MAX_INPUT_LENGTH) {
-                    active_term->input[active_term->input_cursor] = key;
-                    active_term->input_cursor++;
+            if (IsKeyDown(KEY_LEFT_CONTROL) == false) {
+                while ((key = GetCharPressed()) != 0) {
+                    if (active_term->input_cursor < MAX_INPUT_LENGTH) {
+                        active_term->input[active_term->input_cursor] = key;
+                        active_term->input_cursor++;
+                    }
                 }
             }
             if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && active_term->input_cursor > 0) {
@@ -1564,6 +1618,9 @@ int main() {
             }
             if (IsKeyPressed(KEY_TAB)) {
                 terminal_autocomplete_input(active_term);
+            }
+            if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_L)) {
+                clear_init(active_term, 0, NULL);
             }
         }
 
