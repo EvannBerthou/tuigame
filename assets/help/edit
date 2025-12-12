@@ -1,1 +1,6 @@
 # Edit
+
+Usage: edit <file path>
+
+Description: Opens the 
+given file in the editor.

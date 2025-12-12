@@ -1,1 +1,10 @@
 # Create
+
+Usage: create (d|f) <path>
+
+Description: Creates a
+directory (d) or file (f)
+at the given path.
+
+It will not create 
+non-existant sub path.

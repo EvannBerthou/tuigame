@@ -1,1 +1,7 @@
 # Print working directory 
+
+Usage: pwd
+
+Description: Prints
+the current working
+directory.

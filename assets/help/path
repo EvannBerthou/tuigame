@@ -1,1 +1,6 @@
 # Path
+
+Usage: path <path>
+
+Description: Prints
+given path full path.

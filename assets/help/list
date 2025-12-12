@@ -1,1 +1,11 @@
 # List
+
+Usage: list (path)
+
+Description: List
+directory content at the
+given path.
+
+If no path is present,
+the current working
+directory is implied.

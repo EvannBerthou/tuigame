@@ -1,1 +1,7 @@
 # Ping
+
+Usage: ping <ip>
+
+Description: Check if the
+given IP address is
+reachable.

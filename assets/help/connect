@@ -1,1 +1,7 @@
 # Connect
+
+Usage: connect <ip>
+
+Description: Connects
+to the machine with the
+given ip address.

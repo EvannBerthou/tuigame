@@ -1,1 +1,11 @@
 # Help
+
+Usage: help (command)
+
+Description: Describe
+all commands installed on
+the system.
+
+Giving a command name
+will open the command
+help page directly.

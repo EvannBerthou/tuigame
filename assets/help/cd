@@ -1,3 +1,7 @@
 # Change directory
 
-Usage: cd <path>
+Usage: cd <folder path>
+
+Description: Changes the
+current working directory 
+to the given path.

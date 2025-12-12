@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "commands.h"
 #include "raylib.h"
 #define GLSL_VERSION 330
 
@@ -292,6 +293,7 @@ typedef struct {
 #define COMMANDS       \
     XI(list, "ls")     \
     XI(cd, NULL)       \
+    XI(echo, NULL)     \
     XI(print, NULL)    \
     XI(path, NULL)     \
     XI(pwd, NULL)      \
@@ -316,22 +318,19 @@ COMMANDS
 #undef XIU
 #undef XIUR
 
-command commands[] = {
 #define XI(n, a, ...) {.name = #n, .alias = a, .init = n##_init, __VA_ARGS__},
 #define XIU(n, a, ...) XI(n, a, .update = n##_update, __VA_ARGS__)
 #define XIUR(n, a) XIU(n, a, .render = n##_render)
-    COMMANDS
+command commands[] = {COMMANDS};
 #undef XI
 #undef XIU
 #undef XIUR
-};
 
 typedef struct {
     const char *name;
     const char *text;
 } command_help_pair;
 
-#include "commands.h"
 #define X(n) {#n, n##_help},
 #define XI(n, a) X(n)
 #define XIU(n, a) X(n)
@@ -491,6 +490,20 @@ void terminal_append_log(terminal *term, const char *text) {
     term->logs[term->log_count] = strdup(text);
     term->log_count++;
     term->offset = fmax(term->log_count - MAX_LINE_COUNT_PER_SCREEN, 0);
+}
+
+void terminal_log_append_text(terminal *term, const char *text) {
+    const char *last_line = term->logs[term->log_count - 1];
+    int current_len = strlen(last_line);
+    int new_text_len = strlen(text);
+    int new_len = current_len + new_text_len + 1;
+    char *new_line = malloc(new_len);
+    memset(new_line, 0, new_len);
+    strncpy(new_line, last_line, current_len);
+    strncat(new_line, text, new_text_len);
+    printf("new line = '%s'", new_line);
+    free((void *)last_line);
+    term->logs[term->log_count - 1] = new_line;
 }
 
 void terminal_replace_last_line(terminal *term, const char *text) {
@@ -745,7 +758,6 @@ int edit_line_offset_prev(const edit_line *first, edit_line *line) {
     return i - 1;
 }
 
-// TODO: Some garbage values sometimes
 void edit_insert_new_line(edit_process *p) {
     int col = fmin(p->cursor_col, p->selected_line->length);
     const char *cut = TextFormat("%.*s", p->selected_line->length - col, p->selected_line->content + col);
@@ -1122,6 +1134,17 @@ int cd_init(terminal *term, int argc, const char **argv) {
     return 0;
 }
 
+int echo_init(terminal *term, int argc, const char **argv) {
+    if (argc > 1) {
+        terminal_append_log(term, "");
+        for (int i = 1; i < argc - 1; i++) {
+            terminal_log_append_text(term, TextFormat("%s ", argv[i]));
+        }
+        terminal_log_append_text(term, argv[argc - 1]);
+    }
+    return 0;
+}
+
 int print_init(terminal *term, int argc, const char **argv) {
     if (argc != 2) {
         terminal_append_log(term, "print <file>");
@@ -1331,6 +1354,7 @@ void help_render(terminal *term, void *args) {
                1, WHITE);
 }
 
+// TODO: Remove empty space argv
 void terminal_handle_command(terminal *term) {
     term->history_ptr = 0;
     int argc = 0;
@@ -1363,14 +1387,7 @@ void terminal_handle_command(terminal *term) {
             term->process_render = c->render;
         }
     } else {
-        // TODO: Implement terminal_log_append_text or something
-        if (strcmp(argv[0], "echo") == 0) {
-            if (argc >= 2) {
-                terminal_append_log(term, input + strlen("echo "));
-            }
-        } else {
-            terminal_append_log(term, TextFormat("Unknown command : %s", argv[0]));
-        }
+        terminal_append_log(term, TextFormat("Unknown command : %s", argv[0]));
     }
 }
 
@@ -1530,15 +1547,20 @@ typedef struct {
     int waiting_time;
 } bootup_sequence_line;
 
-bootup_sequence_line bootup_sequence[] = {{"...", 1000}, {"Starting system", 2000}};
+bootup_sequence_line bootup_sequence[] = {{"...", 500}, {"Starting up system", 1000}};
 const int bootup_sequence_count = sizeof(bootup_sequence) / sizeof(bootup_sequence[0]);
 
 int bootup_sequence_idx = -1;
-float bootup_sequence_line_time_left = 3000;
+float bootup_sequence_line_time_left = 400;
+
+#define DISABLE_BOOTUP_SEQUENCE 1
 
 int bootup_sequence_update(terminal *term, void *args) {
+#if DISABLE_BOOTUP_SEQUENCE
+    return 1;
+#endif
     (void)args;
-    term->title = "Booting";
+    term->title = "Booting System";
     bootup_sequence_line_time_left -= GetFrameTime() * 1000;
     if (bootup_sequence_line_time_left < 0) {
         bootup_sequence_idx++;

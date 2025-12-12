@@ -1,1 +1,6 @@
 # Hostname
+
+Usage: hostname
+
+Description: Prints the
+current machine hostname.

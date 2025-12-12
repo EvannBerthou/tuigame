@@ -1,1 +1,10 @@
 # Netscan
+
+Usage: netscan <ip>
+
+Description: Scans the
+network specified by the
+given IP.
+
+Will display reachable
+machines in the network.

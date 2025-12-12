@@ -1,1 +1,7 @@
 # Print
+
+Usage: print <file>
+
+Description: Prints
+file's content to the 
+screen.
