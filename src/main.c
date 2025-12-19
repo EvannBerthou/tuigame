@@ -513,7 +513,6 @@ void terminal_log_append_text(terminal *term, const char *text) {
     memset(new_line, 0, new_len);
     strncpy(new_line, last_line, current_len);
     strncat(new_line, text, new_text_len);
-    printf("new line = '%s'", new_line);
     free((void *)last_line);
     term->logs[term->log_count - 1] = new_line;
 }
@@ -531,6 +530,18 @@ void terminal_replace_last_line(terminal *term, const char *text) {
         term->logs[term->log_count - 1] = realloc(last_line, new_len);
     }
     strncpy(last_line, text, last_line_len);
+}
+
+void terminal_basic_print(const char *text) {
+    if (*text == '\n') {
+        terminal_append_log(active_term, "");
+    } else {
+        terminal_append_log(active_term, text);
+    }
+}
+
+void terminal_append_print(const char *text) {
+    terminal_log_append_text(active_term, text);
 }
 
 void terminal_append_input(terminal *term) {
@@ -1076,10 +1087,6 @@ void test_render(terminal *term, void *args) {
     render_framebuffer(p->fb);
 }
 
-void terminal_basic_print(const char *text) {
-    terminal_append_log(active_term, text);
-}
-
 int exec_init(terminal *t, int argc, const char **argv) {
     if (argc != 2) {
         terminal_append_log(t, "exec <file>");
@@ -1091,8 +1098,10 @@ int exec_init(terminal *t, int argc, const char **argv) {
         terminal_append_log(t, TextFormat("%s is not a file", filepath));
         return 1;
     }
-    basic_interpreter i = {.print_fn = terminal_basic_print};
+    basic_interpreter i = {.print_fn = terminal_basic_print, .append_print_fn = terminal_append_print};
+    terminal_append_log(t, "");
     execute_program(&i, file->content);
+    t->log_count--;
     return 0;
 }
 

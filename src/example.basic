@@ -1,8 +1,0 @@
-FOR i IN 0..5;
-    IF TRUE;
-        PRINT "HELLO!!!";
-    END
-    IF TRUE;
-        PRINT "GOODBYE!!!";
-    END
-END
