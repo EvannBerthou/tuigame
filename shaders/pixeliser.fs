@@ -82,11 +82,15 @@ void main()
     }
 
     vec4 texelColor = texture(texture0, fragTexCoord);
+    if (texelColor != vec4(0, 0, 0, 1) && texelColor != vec4(1, 1, 1, 1)) {
+        finalColor = texelColor;
+        return;
+    }
 
     float bgGlowIntensity = 1;
     float bgGlow = bgGlowIntensity * smoothstep(1.2, 0.2, length(fragTexCoord - 0.5));
     vec3 backgroundColor = bluePhosphor * bgGlow * 0.4 * mix(0.40, 0.55, noise(fragTexCoord));
-    vec3 color = backgroundColor + (bluePhosphor * texelColor.r);
+    vec3 color = backgroundColor + (bluePhosphor * texelColor.rgb);
 
     vec4 endColor = vec4(color, 1);
     endColor = refreshLines(endColor, fragTexCoord);

@@ -6,7 +6,7 @@ network: 0
 files: 
 - /test/:
 - /abc:1\n2\n3\n4\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\n
-- /x:
+- /x:FOR i IN 0..5;\n    IF TRUE;\n        PRINT "HELLO!!!";\n    END\n    IF TRUE;\n        PRINT "GOODBYE!!!";\n    END\nEND\n
 - /test/sub/:
 - /test/sub/encoresub/:
 - /test/sub/encoresub/fichier:

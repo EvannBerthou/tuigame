@@ -4,12 +4,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "basic.h"
 #include "commands.h"
 #include "raylib.h"
 #define GLSL_VERSION 330
 
 const float WIDTH = 1280;
 const float HEIGHT = 720;
+
+#define FB_SIZE_WIDTH 80
+#define FB_SIZE_HEIGHT 60
+#define FB_SIZE FB_SIZE_WIDTH *FB_SIZE_HEIGHT
 
 Shader terminal_shader = {0};
 RenderTexture2D target = {0};
@@ -34,6 +39,10 @@ typedef struct {
     int selected_index;
     int offset;
 } help_process;
+
+typedef struct {
+    int fb[FB_SIZE];
+} test_process;
 
 #define MAX_INPUT_LENGTH 40
 #define MAX_LINE_COUNT_PER_SCREEN 21
@@ -306,6 +315,8 @@ typedef struct {
     XIU(ping, NULL)    \
     XIUR(edit, NULL)   \
     XIUR(help, NULL)   \
+    XIUR(test, NULL)   \
+    XI(exec, NULL)     \
     XIU(netscan, "ns")
 
 #define XI(n, a) int n##_init(terminal *term, int argc, const char **argv);
@@ -498,6 +509,7 @@ void terminal_log_append_text(terminal *term, const char *text) {
     int new_text_len = strlen(text);
     int new_len = current_len + new_text_len + 1;
     char *new_line = malloc(new_len);
+    assert(new_line != NULL);
     memset(new_line, 0, new_len);
     strncpy(new_line, last_line, current_len);
     strncat(new_line, text, new_text_len);
@@ -961,6 +973,126 @@ int netscan_update(terminal *term, void *args) {
     const char *scanning_machine_ip = network_ip_get_machine(p->scanning_network_ip, p->current_progress);
     terminal_replace_last_line(term, TextFormat("Scanning %s\n", scanning_machine_ip));
     p->found[p->current_progress] = ip_is_reachable(term, scanning_machine_ip);
+    return 0;
+}
+
+int test_init(terminal *term, int argc, const char **argv) {
+    (void)argc;
+    (void)argv;
+    test_process *p = malloc(sizeof(*p));
+    assert(p != NULL);
+    term->args = p;
+    return 0;
+}
+
+static void put_pixel(int *fb, int x, int y, int color) {
+    if (x < 0 || x >= FB_SIZE_WIDTH || y < 0 || y >= FB_SIZE_HEIGHT)
+        return;
+    fb[y * FB_SIZE_WIDTH + x] = color;
+}
+
+static void draw_line(int *fb, int x0, int y0, int x1, int y1, int color) {
+    int dx = abs(x1 - x0);
+    int dy = abs(y1 - y0);
+    int sx = (x0 < x1) ? 1 : -1;
+    int sy = (y0 < y1) ? 1 : -1;
+    int err = dx - dy;
+
+    while (1) {
+        put_pixel(fb, x0, y0, color);
+
+        if (x0 == x1 && y0 == y1)
+            break;
+
+        int e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            x0 += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+typedef enum { TERM_BG, TERM_FG, TERM_BLUE, TERM_GREEN, TERM_RED, TERM_YELLOW, TERM_PURPLE, TERM_COUNT } term_color;
+
+Color cs[TERM_COUNT] = {
+    [TERM_BG] = {0, 0, 0, 255},          [TERM_FG] = {255, 255, 255, 255}, [TERM_GREEN] = {0, 228, 48, 255},
+    [TERM_RED] = {240, 41, 55, 255},     [TERM_BLUE] = {0, 121, 241, 255}, [TERM_YELLOW] = {253, 249, 0, 255},
+    [TERM_PURPLE] = {200, 122, 255, 255}};
+
+void render_framebuffer(int *fb) {
+    int cell_width = (WIDTH - 80) / FB_SIZE_WIDTH;
+    int cell_height = (HEIGHT - 60) / FB_SIZE_HEIGHT;
+    for (int y = 0; y < FB_SIZE_HEIGHT; y++) {
+        for (int x = 0; x < FB_SIZE_WIDTH; x++) {
+            Color c = cs[fb[y * FB_SIZE_WIDTH + x]];
+            DrawRectangle(40 + x * cell_width, 30 + y * cell_height, cell_width, cell_height, c);
+        }
+    }
+}
+
+int test_update(terminal *term, void *args) {
+    test_process *p = (test_process *)args;
+    term->title = NULL;
+    memset(p->fb, 0, sizeof(*p->fb) * FB_SIZE);
+
+    float x_min = -10.0f;
+    float x_max = 10.0f;
+
+    float x_scale = (float)FB_SIZE_WIDTH / (x_max - x_min);
+    float y_scale = (float)FB_SIZE_HEIGHT / 2.0f;
+
+    // Pas d’échantillonnage fin
+    const float dx = 0.01f;
+
+    int prev_x = 0;
+    int prev_y = 0;
+    int first = 1;
+
+    for (float x = x_min; x <= x_max; x += dx) {
+        float y = sinf(x / 5 + GetTime());
+
+        int px = (int)((x - x_min) * x_scale);
+        int py = (int)(FB_SIZE_HEIGHT / 2.f - y * y_scale);
+
+        if (!first)
+            draw_line(p->fb, prev_x, prev_y, px, py, TERM_RED);
+        else
+            first = 0;
+
+        prev_x = px;
+        prev_y = py;
+    }
+
+    return 0;
+}
+
+void test_render(terminal *term, void *args) {
+    (void)term;
+    test_process *p = (test_process *)args;
+    render_framebuffer(p->fb);
+}
+
+void terminal_basic_print(const char *text) {
+    terminal_append_log(active_term, text);
+}
+
+int exec_init(terminal *t, int argc, const char **argv) {
+    if (argc != 2) {
+        terminal_append_log(t, "exec <file>");
+        return 1;
+    }
+    const char *filepath = argv[1];
+    file_node *file = look_up_node(t->fs.pwd, filepath);
+    if (file == NULL || file->folder) {
+        terminal_append_log(t, TextFormat("%s is not a file", filepath));
+        return 1;
+    }
+    basic_interpreter i = {.print_fn = terminal_basic_print};
+    execute_program(&i, file->content);
     return 0;
 }
 
@@ -1662,9 +1794,11 @@ int main() {
         BeginTextureMode(target);
         {
             ClearBackground(BLACK);
-            DrawRectangle(0, 0, WIDTH, 35 + font_size, WHITE);
-            int middle = (WIDTH - MeasureTextEx(terminal_font, active_term->title, 28, 1).x) / 2;
-            DrawTextEx(terminal_font, active_term->title, (Vector2){middle, 30}, 28, 1, BLACK);
+            if (active_term->title != NULL) {
+                DrawRectangle(0, 0, WIDTH, 35 + font_size, WHITE);
+                int middle = (WIDTH - MeasureTextEx(terminal_font, active_term->title, 28, 1).x) / 2;
+                DrawTextEx(terminal_font, active_term->title, (Vector2){middle, 30}, 28, 1, BLACK);
+            }
 
             if (active_term->process_render == NULL) {
                 terminal_render(active_term);
@@ -1689,6 +1823,7 @@ int main() {
             DrawTexturePro(target.texture, src, dest, (Vector2){0}, 0, WHITE);
             EndShaderMode();
         }
+        DrawFPS(0, 0);
         EndDrawing();
     }
     CloseWindow();
