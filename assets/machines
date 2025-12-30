@@ -6,7 +6,7 @@ network: 0
 files: 
 - /test/:
 - /abc:1\n2\n3\n4\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\n
-- /x:variable = 1;\n
+- /x:variable = "text";\nPRINT variable + 1;\n
 - /test/sub/:
 - /test/sub/encoresub/:
 - /test/sub/encoresub/fichier:

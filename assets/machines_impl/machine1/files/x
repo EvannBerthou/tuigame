@@ -1,4 +1,2 @@
-FOR i IN 1..10;
-    j = i;
-    PRINT j;
-END
+variable = "text";
+PRINT 1 + (2 * 5);

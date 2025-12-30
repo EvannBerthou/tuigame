@@ -10,6 +10,15 @@
 #include <unistd.h>
 #include "arena.h"
 
+#define X(x) "TOKEN_" #x,
+const char *token_string[] = {TOKENS};
+#undef X
+
+#define X(x) #x,
+const char *keywords[] = {"KW_NONE", KEYWORDS};
+#undef X
+const size_t keywords_count = sizeof(keywords) / sizeof(keywords[0]);
+
 basic_interpreter *global_interpreter = NULL;
 arena *interpreter_arena = NULL;
 jmp_buf err_jmp;
@@ -36,52 +45,6 @@ void interpreter_log(const char *fmt, ...) {
         global_interpreter->append_print_fn(buffer);
     }
 }
-
-#define TOKENS    \
-    X(SEMICOLON)  \
-    X(IDENTIFIER) \
-    X(KEYWORD)    \
-    X(STRING)     \
-    X(NUMBER)     \
-    X(PLUS)       \
-    X(MINUS)      \
-    X(EQUAL)      \
-    X(DOT)        \
-    X(UNEXPECTED) \
-    X(EOF)
-
-#define X(x) TOKEN_##x,
-typedef enum { TOKENS } token_type;
-#undef X
-
-#define X(x) "TOKEN_" #x,
-const char *token_string[] = {TOKENS};
-#undef X
-
-#define KEYWORDS \
-    X(IF)        \
-    X(ELSE)      \
-    X(FOR)       \
-    X(IN)        \
-    X(FUNCTION)  \
-    X(END)       \
-    X(TRUE)      \
-    X(FALSE)
-
-#define X(x) #x,
-const char *keywords[] = {"KW_NONE", KEYWORDS};
-#undef X
-
-#define X(x) KW_##x,
-typedef enum { KW_NONE, KEYWORDS } keyword_type;
-#undef X
-const size_t keywords_count = sizeof(keywords) / sizeof(keywords[0]);
-
-typedef struct {
-    token_type type;
-    keyword_type keyword;
-    const char *start, *end;
-} token;
 
 void print_token(token *t) {
     printf("%s [%.*s]\n", token_string[t->type], (int)(t->end - t->start), t->start);
@@ -119,7 +82,7 @@ typedef struct {
 
 typedef struct {
     const char *variable;
-    expr value;
+    expr expr;
 } stmt_variable;
 
 struct stmt {
@@ -192,6 +155,15 @@ token next(const char *input) {
         input++;
     } else if (*input == '.') {
         result.type = TOKEN_DOT;
+        input++;
+    } else if (*input == '*') {
+        result.type = TOKEN_STAR;
+        input++;
+    } else if (*input == '(') {
+        result.type = TOKEN_LPAREN;
+        input++;
+    } else if (*input == ')') {
+        result.type = TOKEN_RPAREN;
         input++;
     } else {
         result.type = TOKEN_UNEXPECTED;
@@ -336,7 +308,7 @@ stmt *parse_variable(token *variable) {
     stmt *result = arena_alloc(interpreter_arena, sizeof(*result));
     result->type = STMT_VARIABLE;
     result->as.stmt_variable.variable = tok_to_str(variable);
-    result->as.stmt_variable.value = e;
+    result->as.stmt_variable.expr = e;
     result->next = NULL;
     result->jmp = NULL;
     expect(TOKEN_SEMICOLON);
@@ -354,14 +326,32 @@ stmt *parse_identifier() {
     }
 }
 
-expr parse_expr() {
+expr_binary *make_binary(token_type op, expr left, expr right) {
+    expr_binary *result = arena_alloc(interpreter_arena, sizeof(*result));
+    result->op = op;
+    result->left = arena_alloc(interpreter_arena, sizeof(*result->left));
+    *result->left = left;
+    result->right = arena_alloc(interpreter_arena, sizeof(*result->left));
+    *result->right = right;
+    return result;
+}
+
+expr_unary *make_unary(token_type op, expr e) {
+    expr_unary *result = arena_alloc(interpreter_arena, sizeof(*result));
+    result->op = op;
+    result->expr = arena_alloc(interpreter_arena, sizeof(*result->expr));
+    *result->expr = e;
+    return result;
+}
+
+expr parse_primary() {
     if (peek_kw(KW_TRUE)) {
         parser_reader++;
-        return (expr){EXPR_BOOL, .as.boolean = 1};
+        return (expr){EXPR_NUMBER, .as.number = 1};
     }
     if (peek_kw(KW_FALSE)) {
         parser_reader++;
-        return (expr){EXPR_BOOL, .as.boolean = 0};
+        return (expr){EXPR_NUMBER, .as.number = 0};
     }
     if (peek_type(TOKEN_STRING)) {
         token *tok = expect(TOKEN_STRING);
@@ -375,7 +365,51 @@ expr parse_expr() {
         token *tok = expect(TOKEN_NUMBER);
         return (expr){EXPR_NUMBER, .as.number = tok_to_num(tok)};
     }
+    if (peek_type(TOKEN_LPAREN)) {
+        expect(TOKEN_LPAREN);
+        expr e = parse_expr();
+        expect(TOKEN_RPAREN);
+        return e;
+    }
     ERR("Expected expression\n");
+}
+
+expr parse_unary() {
+    if (peek_type(TOKEN_MINUS)) {
+        expect(TOKEN_MINUS);
+        expr right = parse_unary();
+        return (expr){EXPR_UNARY, .as.unary = make_unary(TOKEN_MINUS, right)};
+    }
+    if (peek_type(TOKEN_PLUS)) {
+        expect(TOKEN_PLUS);
+        expr right = parse_unary();
+        return (expr){EXPR_UNARY, .as.unary = make_unary(TOKEN_PLUS, right)};
+    }
+    return parse_primary();
+}
+
+expr parse_mult() {
+    expr left = parse_unary();
+    while (peek_type(TOKEN_STAR)) {
+        token *op = expect(TOKEN_STAR);
+        expr right = parse_unary();
+        left = (expr){EXPR_BINARY, .as.binary = make_binary(op->type, left, right)};
+    }
+    return left;
+}
+
+expr parse_add() {
+    expr left = parse_mult();
+    while (peek_type(TOKEN_PLUS) || peek_type(TOKEN_MINUS)) {
+        token *op = parser_next();
+        expr right = parse_mult();
+        left = (expr){EXPR_BINARY, .as.binary = make_binary(op->type, left, right)};
+    }
+    return left;
+}
+
+expr parse_expr() {
+    return parse_add();
 }
 
 stmt *parse_if() {
@@ -536,8 +570,8 @@ void print_val(value *v) {
         interpreter_log("%s", v->as.string);
     } else if (v->type == VAL_NUM) {
         interpreter_log("%d", v->as.number);
-    } else if (v->type == VAL_BOOL) {
-        interpreter_log("%s", v->as.boolean != 0 ? "TRUE" : "FALSE");
+    } else {
+        ERR("Unknown value type %d\n", v->type);
     }
 }
 
@@ -575,35 +609,57 @@ void call_function(stmt *s) {
 }
 
 value eval_expr(expr *expr) {
-    if (expr->type == EXPR_BOOL) {
-        return (value){VAL_BOOL, .as.boolean = expr->as.boolean};
-    }
-    if (expr->type == EXPR_STRING) {
-        return (value){VAL_STRING, .as.string = expr->as.string};
-    }
-    if (expr->type == EXPR_NUMBER) {
-        return (value){VAL_NUM, .as.number = expr->as.number};
-    }
-    if (expr->type == EXPR_VAR) {
-        symbol *s = get_symbol(expr->as.variable);
-        if (s == NULL) {
-            ERR("Unknown symbol %s", expr->as.variable);
+    switch (expr->type) {
+        case EXPR_STRING:
+            return (value){VAL_STRING, .as.string = expr->as.string};
+        case EXPR_NUMBER:
+            return (value){VAL_NUM, .as.number = expr->as.number};
+        case EXPR_VAR:
+            symbol *s = get_symbol(expr->as.variable);
+            if (s == NULL) {
+                ERR("Unknown symbol %s", expr->as.variable);
+            }
+            if (s->type == SYMBOL_VARIABLE_INT) {
+                return (value){VAL_NUM, .as.number = s->as.integer};
+            } else if (s->type == SYMBOL_VARIABLE_STRING) {
+                return (value){VAL_STRING, .as.string = s->as.string};
+            }
+            break;
+        case EXPR_BINARY: {
+            expr_binary *bin = expr->as.binary;
+            value left_v = eval_expr(bin->left);
+            value right_v = eval_expr(bin->right);
+            if (left_v.type != VAL_NUM || right_v.type != VAL_NUM) {
+                ERR("Trying to do arithmetics on non number elements");
+            }
+            int left = left_v.as.number;
+            int right = right_v.as.number;
+            int result = 0;
+            if (bin->op == TOKEN_PLUS)
+                result = left + right;
+            else if (bin->op == TOKEN_MINUS)
+                result = left - right;
+            else if (bin->op == TOKEN_STAR)
+                result = left * right;
+            return (value){VAL_NUM, .as.number = result};
         }
-        if (s->type == SYMBOL_VARIABLE_INT) {
-            return (value){VAL_NUM, .as.number = s->as.integer};
-        } else if (s->type == SYMBOL_VARIABLE_STRING) {
-            return (value){VAL_STRING, .as.string = s->as.string};
-        }
+        case EXPR_UNARY:
+            expr_unary *unary = expr->as.unary;
+            if (unary->op == TOKEN_MINUS) {
+                return (value){VAL_NUM, .as.number = -eval_expr(unary->expr).as.number};
+            }
+            if (unary->op == TOKEN_PLUS) {
+                return eval_expr(unary->expr);
+            }
+            break;
     }
-    ERR("Can't parse this expression\n");
+
+    ERR("Can't evaluate this expression\n");
 }
 
 bool is_true(value v) {
-    if (v.type == VAL_BOOL) {
-        return v.as.boolean != 0;
-    }
     if (v.type == VAL_NUM) {
-        return v.as.number > 0;
+        return v.as.number != 0;
     }
     if (v.type == VAL_STRING) {
         return strlen(v.as.string) != 0;
@@ -707,16 +763,28 @@ bool step_program(basic_interpreter *i) {
             break;
         case STMT_VARIABLE:
             const char *name = s->as.stmt_variable.variable;
-            value v = eval_expr(&s->as.stmt_variable.value);
+            value v = eval_expr(&s->as.stmt_variable.expr);
             symbol *var = get_symbol(name);
             if (var) {
                 if (var->type == SYMBOL_FUNCTION) {
                     ERR("Trying to override function %s as a variable", name);
                 }
             } else {
-                var = create_symbol(name, SYMBOL_VARIABLE_INT);
+                if (v.type == VAL_NUM) {
+                    var = create_symbol(name, SYMBOL_VARIABLE_INT);
+                } else if (v.type == VAL_STRING) {
+                    var = create_symbol(name, SYMBOL_VARIABLE_STRING);
+                } else {
+                    ERR("Unknown value type %d\n", v.type);
+                }
             }
-            var->as.integer = v.as.number;
+            if (var->type == SYMBOL_VARIABLE_INT) {
+                var->as.integer = v.as.number;
+            } else if (var->type == SYMBOL_VARIABLE_STRING) {
+                var->as.string = v.as.string;
+            } else {
+                ERR("Unknown symbol type %d\n", var->type);
+            }
             i->pc = s->next;
             break;
     }

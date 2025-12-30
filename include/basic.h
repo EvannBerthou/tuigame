@@ -3,6 +3,46 @@
 
 #include <stddef.h>
 
+#define TOKENS    \
+    X(SEMICOLON)  \
+    X(IDENTIFIER) \
+    X(KEYWORD)    \
+    X(STRING)     \
+    X(NUMBER)     \
+    X(PLUS)       \
+    X(MINUS)      \
+    X(STAR)       \
+    X(LPAREN)     \
+    X(RPAREN)     \
+    X(EQUAL)      \
+    X(DOT)        \
+    X(UNEXPECTED) \
+    X(EOF)
+
+#define KEYWORDS \
+    X(IF)        \
+    X(ELSE)      \
+    X(FOR)       \
+    X(IN)        \
+    X(FUNCTION)  \
+    X(END)       \
+    X(TRUE)      \
+    X(FALSE)
+
+#define X(x) TOKEN_##x,
+typedef enum { TOKENS } token_type;
+#undef X
+
+#define X(x) KW_##x,
+typedef enum { KW_NONE, KEYWORDS } keyword_type;
+#undef X
+
+typedef struct {
+    token_type type;
+    keyword_type keyword;
+    const char *start, *end;
+} token;
+
 typedef struct stmt_funcall stmt_funcall;
 
 typedef enum {
@@ -52,33 +92,41 @@ void advance_interpreter_time(basic_interpreter *i, float time);
 
 // TEMP
 
-typedef enum { VAL_NUM, VAL_BOOL, VAL_STRING } value_type;
+typedef enum { VAL_NUM, VAL_STRING } value_type;
 
 typedef struct {
     value_type type;
     union {
         int number;
-        bool boolean;
         const char *string;
     } as;
 } value;
 
-typedef enum {
-    EXPR_BOOL,
-    EXPR_STRING,
-    EXPR_NUMBER,
-    EXPR_VAR,
-} expr_type;
+typedef enum { EXPR_STRING, EXPR_NUMBER, EXPR_VAR, EXPR_BINARY, EXPR_UNARY } expr_type;
+
+typedef struct expr expr;
 
 typedef struct {
+    token_type op;
+    expr *expr;
+} expr_unary;
+
+typedef struct {
+    token_type op;
+    expr *left;
+    expr *right;
+} expr_binary;
+
+struct expr {
     expr_type type;
     union {
-        bool boolean;
         int number;
         const char *string;
         const char *variable;
+        expr_unary *unary;
+        expr_binary *binary;
     } as;
-} expr;
+};
 
 struct stmt_funcall {
     const char *function;
