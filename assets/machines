@@ -6,7 +6,7 @@ network: 0
 files: 
 - /test/:
 - /abc:1\n2\n3\n4\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\n
-- /x:FOR i IN 0..5;\n    SLEEP i;\n    PRINT "Sleeping...";\nEND\n
+- /x:variable = 1;\n
 - /test/sub/:
 - /test/sub/encoresub/:
 - /test/sub/encoresub/fichier:

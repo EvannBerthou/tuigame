@@ -1,4 +1,4 @@
-FOR i IN 0..5;
-    SLEEP i;
-    PRINT "Sleeping...";
+FOR i IN 1..10;
+    j = i;
+    PRINT j;
 END

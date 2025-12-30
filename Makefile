@@ -6,7 +6,7 @@ all: build/main_game
 $(shell mkdir -p build)
 
 build/main_game: machines_builder build_docs src/main.c src/basic.c
-	$(CC) $(CFLAGS) src/main.c src/basic.c -o build/main_game -I./include -L ./lib/linux -lraylib -lm -ggdb
+	$(CC) $(CFLAGS) src/main.c src/basic.c src/arena.c -o build/main_game -I./include -L ./lib/linux -lraylib -lm -ggdb
 
 build_docs:
 	sh tools/build_help_pages.sh
@@ -24,6 +24,6 @@ analysis:
 	cppcheck --std=c23 --suppress=missingIncludeSystem --suppress=staticFunction --check-level=exhaustive src/main.c
 
 basic: src/basic.c
-	$(CC) $(CFLAGS) -I./include src/basic.c -o build/basic -ggdb -DBASIC_TEST
+	$(CC) $(CFLAGS) -I./include src/basic.c src/arena.c -o build/basic -ggdb -DBASIC_TEST
 
 .PHONY: all run clean machines_builder build_docs analysis

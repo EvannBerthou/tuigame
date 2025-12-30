@@ -44,6 +44,12 @@ typedef struct {
     int fb[FB_SIZE];
 } test_process;
 
+typedef struct {
+    basic_interpreter interpreter;
+    int fb[2][FB_SIZE];
+    int fb_idx;
+} exec_process;
+
 #define MAX_INPUT_LENGTH 40
 #define MAX_LINE_COUNT_PER_SCREEN 21
 
@@ -316,7 +322,7 @@ typedef struct {
     XIUR(edit, NULL)   \
     XIUR(help, NULL)   \
     XIUR(test, NULL)   \
-    XI(exec, NULL)     \
+    XIUR(exec, NULL)   \
     XIU(netscan, "ns")
 
 #define XI(n, a) int n##_init(terminal *term, int argc, const char **argv);
@@ -1087,6 +1093,22 @@ void test_render(terminal *term, void *args) {
     render_framebuffer(p->fb);
 }
 
+static void put_pixel(int *fb, int x, int y, int color);
+
+void put_pixel_fn(stmt_funcall *call) {
+    exec_process *p = (exec_process *)active_term->args;
+    int x = eval_expr(&call->items[0]).as.number;
+    int y = eval_expr(&call->items[1]).as.number;
+    int c = eval_expr(&call->items[2]).as.number;
+    put_pixel(p->fb[1 - p->fb_idx], x, y, c);
+}
+
+void flip_render_fn(stmt_funcall *call) {
+    (void)call;
+    exec_process *p = (exec_process *)active_term->args;
+    p->fb_idx = 1 - p->fb_idx;
+}
+
 int exec_init(terminal *t, int argc, const char **argv) {
     if (argc != 2) {
         terminal_append_log(t, "exec <file>");
@@ -1098,11 +1120,36 @@ int exec_init(terminal *t, int argc, const char **argv) {
         terminal_append_log(t, TextFormat("%s is not a file", filepath));
         return 1;
     }
-    basic_interpreter i = {.print_fn = terminal_basic_print, .append_print_fn = terminal_append_print};
+    exec_process *p = malloc(sizeof(*p));
+    assert(p != NULL);
+    p->interpreter = (basic_interpreter){.print_fn = terminal_basic_print, .append_print_fn = terminal_append_print};
+    memset(p->fb[0], 0, sizeof(*p->fb[0]) * FB_SIZE);
+    memset(p->fb[1], 0, sizeof(*p->fb[1]) * FB_SIZE);
     terminal_append_log(t, "");
-    execute_program(&i, file->content);
-    t->log_count--;
+    init_interpreter(&p->interpreter, file->content);
+    register_function(&p->interpreter, "PUTPIXEL", put_pixel_fn);
+    register_function(&p->interpreter, "RENDER", flip_render_fn);
+    t->args = p;
     return 0;
+}
+
+int exec_update(terminal *t, void *args) {
+    exec_process *p = (exec_process *)args;
+    t->title = NULL;
+    advance_interpreter_time(&p->interpreter, GetFrameTime());
+    for (int i = 0; i < 1000; i++) {
+        if (!step_program(&p->interpreter)) {
+            t->log_count--;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void exec_render(terminal *t, void *args) {
+    (void)t;
+    exec_process *p = (exec_process *)args;
+    render_framebuffer(p->fb[p->fb_idx]);
 }
 
 typedef struct {

@@ -1,3 +1,4 @@
+// TODO: Memory leaks everywhere
 #include "basic.h"
 #include <ctype.h>
 #include <setjmp.h>
@@ -5,9 +6,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <unistd.h>
+#include "arena.h"
 
 basic_interpreter *global_interpreter = NULL;
+arena *interpreter_arena = NULL;
 jmp_buf err_jmp;
 int error_line = 0;
 
@@ -94,54 +98,29 @@ keyword_type get_keyword(token tok) {
 }
 
 typedef enum {
+    STMT_NOP,
     STMT_FUNCALL,
     STMT_IF,
     STMT_FOR,
+    STMT_FOREND,
+    STMT_VARIABLE,
 } stmt_type;
-
-typedef enum {
-    EXPR_BOOL,
-    EXPR_STRING,
-    EXPR_NUMBER,
-    EXPR_VAR,
-} expr_type;
-
-typedef struct {
-    expr_type type;
-    union {
-        bool boolean;
-        int number;
-        const char *string;
-        const char *variable;
-    } as;
-} expr;
 
 typedef struct stmt stmt;
 
 typedef struct {
-    stmt *items;
-    size_t count;
-    size_t capacity;
-} stmt_list;
-
-struct stmt_funcall {
-    const char *function;
-    expr *items;
-    int count;
-    int capacity;
-};
-
-typedef struct {
     expr condition;
-    stmt_list *then_branch;
-    stmt_list *else_branch;
 } stmt_if;
 
 typedef struct {
     const char *variable;
     int min, max, step;
-    stmt_list *body;
 } stmt_for;
+
+typedef struct {
+    const char *variable;
+    expr value;
+} stmt_variable;
 
 struct stmt {
     stmt_type type;
@@ -149,33 +128,27 @@ struct stmt {
         stmt_funcall stmt_funcall;
         stmt_if stmt_if;
         stmt_for stmt_for;
+        stmt_variable stmt_variable;
     } as;
+
+    stmt *next;
+    stmt *jmp;
 };
 
-typedef enum { VAL_NUM, VAL_BOOL, VAL_STRING } value_type;
-
-typedef struct {
-    value_type type;
-    union {
-        int number;
-        bool boolean;
-        const char *string;
-    } as;
-} value;
+void destroy_interpreter() {
+    global_interpreter = NULL;
+    printf("Freeing %zu allocated bytes from arena\n", interpreter_arena->ptr);
+    arena_free(interpreter_arena);
+    interpreter_arena = NULL;
+}
 
 #define append(l, x)                                                               \
     do {                                                                           \
-        if ((l) == NULL) {                                                         \
-            (l) = malloc(sizeof(*l));                                              \
-            (l)->count = 0;                                                        \
-            (l)->capacity = 0;                                                     \
-            (l)->items = NULL;                                                     \
-        }                                                                          \
         if ((l)->count == (l)->capacity) {                                         \
             (l)->capacity = (l)->capacity == 0 ? 64 : (l)->capacity * 2;           \
             (l)->items = realloc((l)->items, sizeof(*(l)->items) * (l)->capacity); \
         }                                                                          \
-        (l)->items[l->count++] = (x);                                              \
+        (l)->items[(l)->count++] = (x);                                            \
     } while (0)
 
 token next(const char *input) {
@@ -202,7 +175,7 @@ token next(const char *input) {
         result.type = TOKEN_IDENTIFIER;
         if (*input == '$')
             input++;
-        while (isalpha(*input))
+        while (isalnum(*input))
             input++;
     } else if (isdigit(*input)) {
         result.type = TOKEN_NUMBER;
@@ -307,7 +280,7 @@ const char *tok_to_str(token *tok) {
         len -= 2;
     }
 
-    char *result = malloc(len + 1);
+    char *result = arena_alloc(interpreter_arena, len + 1);
     memset(result, 0, len + 1);
     strncpy(result, start, len);
     return result;
@@ -326,18 +299,27 @@ int tok_to_num(token *tok) {
     return result;
 }
 
-stmt_list *parse_stmt_list();
+stmt *parse_block();
 expr parse_expr();
 
-stmt parse_identifier() {
-    stmt result = {0};
-    result.type = STMT_FUNCALL;
+stmt *stmt_tail(stmt *s) {
+    while (s && s->next) {
+        s = s->next;
+    }
+    return s;
+}
 
-    token *function = expect(TOKEN_IDENTIFIER);
+stmt *parse_funcall(token *function) {
+    stmt *result = arena_alloc(interpreter_arena, sizeof(*result));
+    result->type = STMT_FUNCALL;
+    result->next = NULL;
+    result->jmp = NULL;
 
-    stmt_funcall *funcall = &result.as.stmt_funcall;
+    stmt_funcall *funcall = &result->as.stmt_funcall;
     funcall->function = tok_to_str(function);
     funcall->items = NULL;
+    funcall->capacity = 0;
+    funcall->count = 0;
 
     while (!peek_type(TOKEN_SEMICOLON) && !peek_type(TOKEN_UNEXPECTED) && !peek_type(TOKEN_EOF)) {
         expr e = parse_expr();
@@ -346,6 +328,30 @@ stmt parse_identifier() {
 
     expect(TOKEN_SEMICOLON);
     return result;
+}
+
+stmt *parse_variable(token *variable) {
+    parser_next();  // Skipping =
+    expr e = parse_expr();
+    stmt *result = arena_alloc(interpreter_arena, sizeof(*result));
+    result->type = STMT_VARIABLE;
+    result->as.stmt_variable.variable = tok_to_str(variable);
+    result->as.stmt_variable.value = e;
+    result->next = NULL;
+    result->jmp = NULL;
+    expect(TOKEN_SEMICOLON);
+    return result;
+}
+
+stmt *parse_identifier() {
+    token *identifier = parser_next();
+    token *next = parser_peek();
+
+    if (next->type == TOKEN_EQUAL) {
+        return parse_variable(identifier);
+    } else {
+        return parse_funcall(identifier);
+    }
 }
 
 expr parse_expr() {
@@ -372,19 +378,31 @@ expr parse_expr() {
     ERR("Expected expression\n");
 }
 
-stmt parse_if() {
-    stmt result = {0};
-    result.type = STMT_IF;
+stmt *parse_if() {
+    stmt *result = arena_alloc(interpreter_arena, sizeof(*result));
+    result->type = STMT_IF;
+    result->next = NULL;
+    result->jmp = NULL;
 
-    stmt_if *if_stmt = &result.as.stmt_if;
+    stmt_if *if_stmt = &result->as.stmt_if;
     if_stmt->condition = parse_expr();
     expect(TOKEN_SEMICOLON);
 
-    if_stmt->then_branch = parse_stmt_list();
+    stmt *end = arena_alloc(interpreter_arena, sizeof(*end));
+    end->type = STMT_NOP;
+    end->next = NULL;
+    end->jmp = NULL;
+
+    result->next = parse_block();
+    stmt_tail(result->next)->next = end;
+
     token *peek = parser_peek();
     if (peek->keyword == KW_ELSE) {
         parser_reader++;
-        if_stmt->else_branch = parse_stmt_list();
+        result->jmp = parse_block();
+        stmt_tail(result->jmp)->next = end;
+    } else {
+        result->jmp = end;
     }
 
     expect_kw(KW_END);
@@ -394,11 +412,13 @@ stmt parse_if() {
     return result;
 }
 
-stmt parse_for() {
-    stmt result = {0};
-    result.type = STMT_FOR;
+stmt *parse_for() {
+    stmt *result = arena_alloc(interpreter_arena, sizeof(*result));
+    result->type = STMT_FOR;
+    result->next = NULL;
+    result->jmp = NULL;
 
-    stmt_for *for_stmt = &result.as.stmt_for;
+    stmt_for *for_stmt = &result->as.stmt_for;
     token *variable = expect(TOKEN_IDENTIFIER);
     for_stmt->variable = tok_to_str(variable);
 
@@ -412,13 +432,28 @@ stmt parse_for() {
     for_stmt->min = tok_to_num(from);
     for_stmt->max = tok_to_num(to);
     for_stmt->step = for_stmt->min > for_stmt->max ? -1 : 1;
-    for_stmt->body = parse_stmt_list();
-    expect_kw(KW_END);
 
+    stmt *body = parse_block();
+
+    stmt *end = arena_alloc(interpreter_arena, sizeof(*end));
+    end->type = STMT_FOREND;
+    end->next = NULL;
+    end->jmp = result;
+    end->as.stmt_for = result->as.stmt_for;
+
+    if (body) {
+        stmt_tail(body)->next = end;
+        result->jmp = body;
+    } else {
+        result->jmp = end;
+    }
+    result->next = end;
+
+    expect_kw(KW_END);
     return result;
 }
 
-stmt parse_keyword() {
+stmt *parse_keyword() {
     token *t = expect(TOKEN_KEYWORD);
     switch (t->keyword) {
         case KW_NONE:
@@ -437,10 +472,10 @@ stmt parse_keyword() {
         case KW_FALSE:
             break;
     }
-    return (stmt){0};
+    return NULL;
 }
 
-stmt parse_stmt() {
+stmt *parse_stmt() {
     while (peek_type(TOKEN_SEMICOLON))
         parser_reader++;
     if (peek_type(TOKEN_IDENTIFIER))
@@ -450,24 +485,48 @@ stmt parse_stmt() {
     ERR("Unexpected token of type %s\n", token_string[parser_peek()->type]);
 }
 
-stmt_list *parse_stmt_list() {
-    stmt_list *list = NULL;
+stmt *parse_block() {
+    stmt *head = NULL;
+    stmt *tail = NULL;
     while (parser_peek()->type != TOKEN_EOF && parser_peek()->type != TOKEN_UNEXPECTED &&
            parser_peek()->keyword != KW_ELSE && parser_peek()->keyword != KW_END) {
-        append(list, parse_stmt());
+        stmt *s = parse_stmt();
+        stmt *s_tail = stmt_tail(s);
+        if (head == NULL) {
+            head = s;
+            tail = s_tail;
+        } else {
+            tail->next = s;
+            tail = s_tail;
+        }
     }
-    return list;
+    return head;
 }
 
 symbol *get_symbol(const char *name) {
-    for (size_t i = 0; i < global_interpreter->symbol_count; i++) {
-        if (global_interpreter->symbols_table[i].name != NULL) {
-            if (strcmp(global_interpreter->symbols_table[i].name, name) == 0) {
-                return &global_interpreter->symbols_table[i];
-            }
+    for (size_t i = 0; i < MAX_SYMBOL_COUNT; i++) {
+        symbol *s = &global_interpreter->symbols_table[i];
+        if (s && s->type != SYMBOL_NONE && strcmp(s->name, name) == 0) {
+            return &global_interpreter->symbols_table[i];
         }
     }
     return NULL;
+}
+
+symbol *create_symbol(const char *name, symbol_type type) {
+    if (get_symbol(name) != NULL) {
+        ERR("Symbol %s already exists", name);
+    }
+    for (size_t i = 0; i < MAX_SYMBOL_COUNT; i++) {
+        symbol *loop_variable = &global_interpreter->symbols_table[i];
+        if (loop_variable->type == SYMBOL_NONE) {
+            loop_variable->name = name;
+            loop_variable->type = type;
+            global_interpreter->symbol_count++;
+            return loop_variable;
+        }
+    }
+    ERR("No more space to allocate more symbols");
 }
 
 value eval_expr(expr *e);
@@ -486,7 +545,6 @@ void print_fn(stmt_funcall *call) {
     for (int i = 0; i < call->count - 1; i++) {
         value v = eval_expr(&call->items[i]);
         print_val(&v);
-        interpreter_log(" ");
     }
     value last = eval_expr(&call->items[call->count - 1]);
     print_val(&last);
@@ -500,7 +558,8 @@ void exit_fn(stmt_funcall *call) {
 
 void sleep_fn(stmt_funcall *call) {
     value v = eval_expr(&call->items[0]);
-    sleep(v.as.number);
+    global_interpreter->wakeup_time = global_interpreter->time_elapsed + v.as.number;
+    global_interpreter->state = STATE_SLEEPING;
 }
 
 void call_function(stmt *s) {
@@ -552,42 +611,6 @@ bool is_true(value v) {
     ERR("Unknown value type");
 }
 
-void exec_block(stmt_list *block);
-
-void exec_stmt(stmt *s) {
-    switch (s->type) {
-        case STMT_FUNCALL:
-            call_function(s);
-            break;
-        case STMT_IF:
-            value eval_result = eval_expr(&s->as.stmt_if.condition);
-            if (is_true(eval_result)) {
-                exec_block(s->as.stmt_if.then_branch);
-            } else if (s->as.stmt_if.else_branch != NULL) {
-                exec_block(s->as.stmt_if.else_branch);
-            }
-            break;
-        case STMT_FOR:
-            symbol *loop_variable = &global_interpreter->symbols_table[global_interpreter->symbol_count];
-            global_interpreter->symbol_count++;
-            loop_variable->name = s->as.stmt_for.variable;
-            loop_variable->type = SYMBOL_VARIABLE_INT;
-            for (int i = s->as.stmt_for.min; i != s->as.stmt_for.max; i += s->as.stmt_for.step) {
-                loop_variable->as.integer = i;
-                exec_block(s->as.stmt_for.body);
-            }
-            loop_variable->name = NULL;
-            loop_variable->type = SYMBOL_NONE;
-            break;
-    }
-}
-
-void exec_block(stmt_list *block) {
-    for (size_t i = 0; i < block->count; i++) {
-        exec_stmt(&block->items[i]);
-    }
-}
-
 void register_function(basic_interpreter *i, const char *name, void (*f)(stmt_funcall *)) {
     i->symbols_table[i->symbol_count].type = SYMBOL_FUNCTION;
     i->symbols_table[i->symbol_count].name = name;
@@ -601,48 +624,137 @@ void register_std_lib(basic_interpreter *i) {
     register_function(i, "SLEEP", sleep_fn);
 }
 
-stmt_list *init_interpreter(basic_interpreter *i, const char *src) {
+void init_interpreter(basic_interpreter *i, const char *src) {
     global_interpreter = i;
+    interpreter_arena = arena_default();
     parser_reader = 0;
     token_count = 0;
+    volatile int error_code = 0;
+    if ((error_code = setjmp(err_jmp)) != 0) {
+        if (error_code != -1) {
+            printf("\nexit from error from line %d\n", error_line);
+        }
+        destroy_interpreter();
+        return;
+    }
     register_std_lib(i);
     lexical_analysis(src);
-    stmt_list *program = parse_stmt_list();
+    i->pc = parse_block();
     expect(TOKEN_EOF);
-    return program;
-}
-
-void execute_program(basic_interpreter *i, const char *src) {
 }
 
 bool step_program(basic_interpreter *i) {
     int error_code = 0;
     if ((error_code = setjmp(err_jmp)) != 0) {
         if (error_code != -1) {
-            printf("exit from error from line %d\n", error_line);
+            printf("\nexit from error from line %d\n", error_line);
         }
+        destroy_interpreter();
         return false;
     }
+
+    if (i->state == STATE_SLEEPING) {
+        if (i->time_elapsed >= i->wakeup_time) {
+            i->state = STATE_RUNNING;
+        } else {
+            return true;
+        }
+    }
+
+    stmt *s = i->pc;
+    if (s == NULL) {
+        destroy_interpreter();
+        return false;
+    }
+    switch (s->type) {
+        case STMT_FUNCALL:
+            call_function(s);
+            i->pc = s->next;
+            break;
+        case STMT_IF:
+            if (is_true(eval_expr(&s->as.stmt_if.condition))) {
+                i->pc = s->next;
+            } else {
+                i->pc = s->jmp;
+            }
+            break;
+        case STMT_FOR: {
+            symbol *var = get_symbol(s->as.stmt_for.variable);
+            if (var == NULL) {
+                var = create_symbol(s->as.stmt_for.variable, SYMBOL_VARIABLE_INT);
+                var->as.integer = s->as.stmt_for.min;
+            }
+            if (var->as.integer == s->as.stmt_for.max) {
+                i->pc = s->next;
+            } else {
+                i->pc = s->jmp;
+            }
+            break;
+        }
+        case STMT_FOREND: {
+            symbol *var = get_symbol(s->as.stmt_for.variable);
+            if (var->as.integer == s->as.stmt_for.max) {
+                i->pc = s->next;
+                var->type = SYMBOL_NONE;
+                break;
+            }
+            var->as.integer += s->as.stmt_for.step;
+            i->pc = s->jmp;
+            break;
+        }
+        case STMT_NOP:
+            i->pc = s->next;
+            break;
+        case STMT_VARIABLE:
+            const char *name = s->as.stmt_variable.variable;
+            value v = eval_expr(&s->as.stmt_variable.value);
+            symbol *var = get_symbol(name);
+            if (var) {
+                if (var->type == SYMBOL_FUNCTION) {
+                    ERR("Trying to override function %s as a variable", name);
+                }
+            } else {
+                var = create_symbol(name, SYMBOL_VARIABLE_INT);
+            }
+            var->as.integer = v.as.number;
+            i->pc = s->next;
+            break;
+    }
+
     return true;
 }
 
-void destroy_interpreter() {
-    global_interpreter = NULL;
-}
-
-#ifdef BASIC_TEST
 void default_print(const char *text) {
     printf("%s", text);
 }
 
+void advance_interpreter_time(basic_interpreter *i, float time) {
+    i->time_elapsed += time;
+}
+
+long long timeInMilliseconds(void) {
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return (((long long)tv.tv_sec) * 1000) + (tv.tv_usec / 1000);
+}
+
+#ifdef BASIC_TEST
 int main(void) {
     const char content[] = {
 #embed "../assets/machines_impl/machine1/files/x"
     };
     basic_interpreter i = {.print_fn = default_print, .append_print_fn = default_print};
-    stmt_list *program = init_interpreter(&i, content);
-    step_program(program);
-    destroy_interpreter();
+    init_interpreter(&i, content);
+
+    long long last_time = timeInMilliseconds();
+    while (true) {
+        long long new_time = timeInMilliseconds();
+        advance_interpreter_time(&i, (new_time - last_time) / 1000.f);
+        if (!step_program(&i))
+            break;
+        last_time = new_time;
+    }
     return 0;
 }
 #endif
