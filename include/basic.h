@@ -15,6 +15,15 @@
     X(LPAREN)     \
     X(RPAREN)     \
     X(EQUAL)      \
+    X(EQEQ)       \
+    X(NEQ)        \
+    X(LT)         \
+    X(LTE)        \
+    X(GT)         \
+    X(GTE)        \
+    X(AND)        \
+    X(OR)         \
+    X(NOT)        \
     X(DOT)        \
     X(UNEXPECTED) \
     X(EOF)

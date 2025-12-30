@@ -1,2 +1,5 @@
-variable = "text";
-PRINT 1 + (2 * 5);
+FOR i IN 1..10;
+    PUTPIXEL 14 13 2;
+    RENDER;
+    SLEEP 1;
+END

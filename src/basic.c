@@ -54,7 +54,9 @@ keyword_type get_keyword(token tok) {
     size_t token_len = tok.end - tok.start;
     for (size_t i = 1; i < keywords_count; i++) {
         if (strncmp(keywords[i], tok.start, token_len) == 0) {
-            return i;
+            if (strlen(keywords[i]) == token_len) {
+                return i;
+            }
         }
     }
     return KW_NONE;
@@ -100,7 +102,6 @@ struct stmt {
 
 void destroy_interpreter() {
     global_interpreter = NULL;
-    printf("Freeing %zu allocated bytes from arena\n", interpreter_arena->ptr);
     arena_free(interpreter_arena);
     interpreter_arena = NULL;
 }
@@ -153,6 +154,10 @@ token next(const char *input) {
     } else if (*input == '=') {
         result.type = TOKEN_EQUAL;
         input++;
+        if (*input && *input == '=') {
+            result.type = TOKEN_EQEQ;
+            input++;
+        }
     } else if (*input == '.') {
         result.type = TOKEN_DOT;
         input++;
@@ -165,11 +170,43 @@ token next(const char *input) {
     } else if (*input == ')') {
         result.type = TOKEN_RPAREN;
         input++;
+    } else if (*input == '!') {
+        input++;
+        if (*input && *input == '=') {
+            result.type = TOKEN_NEQ;
+        } else {
+            result.type = TOKEN_NOT;
+        }
+        input++;
+    } else if (*input == '>') {
+        input++;
+        if (*input && *input == '=') {
+            result.type = TOKEN_GTE;
+        } else {
+            result.type = TOKEN_GT;
+        }
+        input++;
+    } else if (*input == '<') {
+        input++;
+        if (*input && *input == '=') {
+            result.type = TOKEN_LTE;
+        } else {
+            result.type = TOKEN_LT;
+        }
+        input++;
     } else {
         result.type = TOKEN_UNEXPECTED;
         input++;
     }
     result.end = input;
+
+    if (result.type == TOKEN_IDENTIFIER) {
+        if (strncmp(result.start, "AND", 3) == 0) {
+            result.type = TOKEN_AND;
+        } else if (strncmp(result.start, "OR", 2) == 0) {
+            result.type = TOKEN_OR;
+        }
+    }
 
     if (result.type == TOKEN_IDENTIFIER) {
         keyword_type kw = get_keyword(result);
@@ -226,13 +263,13 @@ token *expect(token_type type) {
     return read;
 }
 
-bool expect_kw(keyword_type type) {
+token *expect_kw(keyword_type type) {
     token *read = parser_peek();
     if (read->keyword != type) {
         ERR("Expecting keyword %s but got %s : ", keywords[type], keywords[read->keyword]);
     }
     parser_reader++;
-    return true;
+    return read;
 }
 
 bool match(token_type type) {
@@ -408,8 +445,46 @@ expr parse_add() {
     return left;
 }
 
+expr parse_comparaisons() {
+    expr left = parse_add();
+
+    while (peek_type(TOKEN_EQEQ) || peek_type(TOKEN_NEQ) || peek_type(TOKEN_LT) || peek_type(TOKEN_LTE) ||
+           peek_type(TOKEN_GT) || peek_type(TOKEN_GTE)) {
+        token *op = parser_next();
+        expr right = parse_add();
+
+        left = (expr){EXPR_BINARY, .as.binary = make_binary(op->type, left, right)};
+    }
+
+    return left;
+}
+
+expr parse_and() {
+    expr left = parse_comparaisons();
+
+    while (peek_type(TOKEN_AND)) {
+        token *op = expect(TOKEN_AND);
+        expr right = parse_comparaisons();
+        left = (expr){EXPR_BINARY, .as.binary = make_binary(op->type, left, right)};
+    }
+
+    return left;
+}
+
+expr parse_or() {
+    expr left = parse_and();
+
+    while (peek_type(TOKEN_OR)) {
+        token *op = expect(TOKEN_OR);
+        expr right = parse_and();
+        left = (expr){EXPR_BINARY, .as.binary = make_binary(op->type, left, right)};
+    }
+
+    return left;
+}
+
 expr parse_expr() {
-    return parse_add();
+    return parse_or();
 }
 
 stmt *parse_if() {
@@ -608,6 +683,13 @@ void call_function(stmt *s) {
     function->as.function(&call);
 }
 
+value value_is_num(value v) {
+    if (v.type != VAL_NUM) {
+        ERR("Trying to do arithmetics on non number elements");
+    }
+    return v;
+}
+
 value eval_expr(expr *expr) {
     switch (expr->type) {
         case EXPR_STRING:
@@ -627,21 +709,45 @@ value eval_expr(expr *expr) {
             break;
         case EXPR_BINARY: {
             expr_binary *bin = expr->as.binary;
-            value left_v = eval_expr(bin->left);
-            value right_v = eval_expr(bin->right);
-            if (left_v.type != VAL_NUM || right_v.type != VAL_NUM) {
-                ERR("Trying to do arithmetics on non number elements");
+
+            if (bin->op == TOKEN_AND) {
+                value left_v = value_is_num(eval_expr(bin->left));
+                if (left_v.as.number == 0)
+                    return left_v;
+                return value_is_num(eval_expr(bin->right));
+            } else if (bin->op == TOKEN_OR) {
+                value left_v = value_is_num(eval_expr(bin->left));
+                if (left_v.as.number != 0)
+                    return left_v;
+                return value_is_num(eval_expr(bin->right));
+            } else {
+                value left_v = value_is_num(eval_expr(bin->left));
+                value right_v = value_is_num(eval_expr(bin->right));
+                int left = left_v.as.number;
+                int right = right_v.as.number;
+                int result = 0;
+                if (bin->op == TOKEN_PLUS)
+                    result = left + right;
+                else if (bin->op == TOKEN_MINUS)
+                    result = left - right;
+                else if (bin->op == TOKEN_STAR)
+                    result = left * right;
+                else if (bin->op == TOKEN_EQEQ)
+                    result = left == right;
+                else if (bin->op == TOKEN_NEQ)
+                    result = left != right;
+                else if (bin->op == TOKEN_LT)
+                    result = left < right;
+                else if (bin->op == TOKEN_LTE)
+                    result = left <= right;
+                else if (bin->op == TOKEN_GT)
+                    result = left > right;
+                else if (bin->op == TOKEN_GTE)
+                    result = left >= right;
+                else
+                    ERR("Unknown binary operation %s between %d and %d\n", token_string[bin->op], left, right);
+                return (value){VAL_NUM, .as.number = result};
             }
-            int left = left_v.as.number;
-            int right = right_v.as.number;
-            int result = 0;
-            if (bin->op == TOKEN_PLUS)
-                result = left + right;
-            else if (bin->op == TOKEN_MINUS)
-                result = left - right;
-            else if (bin->op == TOKEN_STAR)
-                result = left * right;
-            return (value){VAL_NUM, .as.number = result};
         }
         case EXPR_UNARY:
             expr_unary *unary = expr->as.unary;

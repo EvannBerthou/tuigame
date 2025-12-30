@@ -21,7 +21,7 @@ clean:
 	-rm -rf build
 
 analysis:
-	cppcheck --std=c23 --suppress=missingIncludeSystem --suppress=staticFunction --check-level=exhaustive src/main.c
+	cppcheck --std=c23 --suppress=missingIncludeSystem --suppress=staticFunction --check-level=exhaustive src/main.c src/basic.c src/arena.c
 
 basic: src/basic.c
 	$(CC) $(CFLAGS) -I./include src/basic.c src/arena.c -o build/basic -ggdb -DBASIC_TEST
