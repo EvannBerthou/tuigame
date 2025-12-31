@@ -68,6 +68,8 @@ typedef enum {
     STMT_IF,
     STMT_FOR,
     STMT_FOREND,
+    STMT_WHILE,
+    STMT_WHILEEND,
     STMT_VARIABLE,
 } stmt_type;
 
@@ -83,6 +85,10 @@ typedef struct {
 } stmt_for;
 
 typedef struct {
+    expr condition;
+} stmt_while;
+
+typedef struct {
     const char *variable;
     expr expr;
 } stmt_variable;
@@ -93,6 +99,7 @@ struct stmt {
         stmt_funcall stmt_funcall;
         stmt_if stmt_if;
         stmt_for stmt_for;
+        stmt_while stmt_while;
         stmt_variable stmt_variable;
     } as;
 
@@ -163,6 +170,9 @@ token next(const char *input) {
         input++;
     } else if (*input == '*') {
         result.type = TOKEN_STAR;
+        input++;
+    } else if (*input == '/') {
+        result.type = TOKEN_SLASH;
         input++;
     } else if (*input == '(') {
         result.type = TOKEN_LPAREN;
@@ -258,7 +268,7 @@ token *parser_next() {
 token *expect(token_type type) {
     token *read = parser_next();
     if (read->type != type) {
-        ERR("Expecting token type %s but got %s\n", token_string[type], token_string[read->type]);
+        ERR("Expecting token type %s but got %s", token_string[type], token_string[read->type]);
     }
     return read;
 }
@@ -340,7 +350,6 @@ stmt *parse_funcall(token *function) {
 }
 
 stmt *parse_variable(token *variable) {
-    parser_next();  // Skipping =
     expr e = parse_expr();
     stmt *result = arena_alloc(interpreter_arena, sizeof(*result));
     result->type = STMT_VARIABLE;
@@ -357,6 +366,7 @@ stmt *parse_identifier() {
     token *next = parser_peek();
 
     if (next->type == TOKEN_EQUAL) {
+        parser_next();  // Skipping =
         return parse_variable(identifier);
     } else {
         return parse_funcall(identifier);
@@ -427,8 +437,8 @@ expr parse_unary() {
 
 expr parse_mult() {
     expr left = parse_unary();
-    while (peek_type(TOKEN_STAR)) {
-        token *op = expect(TOKEN_STAR);
+    while (peek_type(TOKEN_STAR) || peek_type(TOKEN_SLASH)) {
+        token *op = parser_next();
         expr right = parse_unary();
         left = (expr){EXPR_BINARY, .as.binary = make_binary(op->type, left, right)};
     }
@@ -562,6 +572,36 @@ stmt *parse_for() {
     return result;
 }
 
+stmt *parse_while() {
+    stmt *result = arena_alloc(interpreter_arena, sizeof(*result));
+    result->type = STMT_WHILE;
+    result->next = NULL;
+    result->jmp = NULL;
+
+    stmt_while *while_stmt = &result->as.stmt_while;
+    while_stmt->condition = parse_expr();
+    expect(TOKEN_SEMICOLON);
+
+    stmt *body = parse_block();
+
+    stmt *end = arena_alloc(interpreter_arena, sizeof(*end));
+    end->type = STMT_WHILEEND;
+    end->next = NULL;
+    end->jmp = result;
+    end->as.stmt_while = result->as.stmt_while;
+
+    if (body) {
+        stmt_tail(body)->next = end;
+        result->jmp = body;
+    } else {
+        result->jmp = end;
+    }
+    result->next = end;
+
+    expect_kw(KW_END);
+    return result;
+}
+
 stmt *parse_keyword() {
     token *t = expect(TOKEN_KEYWORD);
     switch (t->keyword) {
@@ -573,6 +613,8 @@ stmt *parse_keyword() {
             return parse_for();
         case KW_FUNCTION:
             ERR("TODO %s\n", keywords[t->keyword]);
+        case KW_WHILE:
+            return parse_while();
         case KW_ELSE:
         case KW_IN:
         case KW_END:
@@ -732,6 +774,8 @@ value eval_expr(expr *expr) {
                     result = left - right;
                 else if (bin->op == TOKEN_STAR)
                     result = left * right;
+                else if (bin->op == TOKEN_SLASH)
+                    result = left / right;
                 else if (bin->op == TOKEN_EQEQ)
                     result = left == right;
                 else if (bin->op == TOKEN_NEQ)
@@ -867,7 +911,7 @@ bool step_program(basic_interpreter *i) {
         case STMT_NOP:
             i->pc = s->next;
             break;
-        case STMT_VARIABLE:
+        case STMT_VARIABLE: {
             const char *name = s->as.stmt_variable.variable;
             value v = eval_expr(&s->as.stmt_variable.expr);
             symbol *var = get_symbol(name);
@@ -893,6 +937,17 @@ bool step_program(basic_interpreter *i) {
             }
             i->pc = s->next;
             break;
+        }
+        case STMT_WHILE:
+        case STMT_WHILEEND: {
+            value condition = eval_expr(&s->as.stmt_while.condition);
+            if (is_true(condition)) {
+                i->pc = s->jmp;
+            } else {
+                i->pc = s->next;
+            }
+            break;
+        }
     }
 
     return true;

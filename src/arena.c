@@ -21,6 +21,8 @@ void *arena_alloc(arena *a, size_t size) {
 }
 
 void arena_free(arena *a) {
-    free(a->content);
+    if (a) {
+        free(a->content);
+    }
     free(a);
 }

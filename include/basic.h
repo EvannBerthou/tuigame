@@ -12,6 +12,7 @@
     X(PLUS)       \
     X(MINUS)      \
     X(STAR)       \
+    X(SLASH)      \
     X(LPAREN)     \
     X(RPAREN)     \
     X(EQUAL)      \
@@ -33,6 +34,7 @@
     X(ELSE)      \
     X(FOR)       \
     X(IN)        \
+    X(WHILE)     \
     X(FUNCTION)  \
     X(END)       \
     X(TRUE)      \
@@ -98,8 +100,7 @@ void init_interpreter(basic_interpreter *i, const char *src);
 bool step_program(basic_interpreter *i);
 void register_function(basic_interpreter *i, const char *name, void (*f)(stmt_funcall *));
 void advance_interpreter_time(basic_interpreter *i, float time);
-
-// TEMP
+void destroy_interpreter();
 
 typedef enum { VAL_NUM, VAL_STRING } value_type;
 

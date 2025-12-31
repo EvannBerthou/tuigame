@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "basic.h"
+#include "bootseq.h"
 #include "commands.h"
 #include "raylib.h"
 #define GLSL_VERSION 330
@@ -1100,7 +1101,7 @@ void put_pixel_fn(stmt_funcall *call) {
     int x = eval_expr(&call->items[0]).as.number;
     int y = eval_expr(&call->items[1]).as.number;
     int c = eval_expr(&call->items[2]).as.number;
-    put_pixel(p->fb[1 - p->fb_idx], x, y, c);
+    put_pixel(p->fb[1 - p->fb_idx], x, y, c % TERM_COUNT);
 }
 
 void flip_render_fn(stmt_funcall *call) {
@@ -1136,8 +1137,12 @@ int exec_init(terminal *t, int argc, const char **argv) {
 int exec_update(terminal *t, void *args) {
     exec_process *p = (exec_process *)args;
     t->title = NULL;
+    if (IsKeyPressed(KEY_C) && IsKeyDown(KEY_LEFT_CONTROL)) {
+        destroy_interpreter();
+        return 1;
+    }
     advance_interpreter_time(&p->interpreter, GetFrameTime());
-    for (int i = 0; i < 1000; i++) {
+    for (int i = 0; i < 10000; i++) {
         if (!step_program(&p->interpreter)) {
             t->log_count--;
             return 1;
@@ -1657,6 +1662,7 @@ bool TextEmpty(const char *s) {
 void load_machines() {
     const char *file_content = LoadFileText("assets/machines");
     int line_count = 0;
+    // TODO: Cropped on file too big
     const char **lines = TextSplit(file_content, '\n', &line_count);
     terminal_count = TextToInteger(lines[0]);
     all_terminals = calloc(terminal_count, sizeof(terminal));
@@ -1682,6 +1688,7 @@ void load_machines() {
                 }
                 char *file = (char *)TextSubtext(lines[i], 0, split_index);
                 const char *content = lines[i] + split_index + 1;
+                printf("File %s content = '%s'\n", file, content);
                 if (file[strlen(file) - 1] == '/') {
                     file[strlen(file) - 1] = '\0';
                     file_node_append_folder_full_path(all_terminals[machine_idx].fs.root, file);
@@ -1733,13 +1740,59 @@ void load_machines() {
 typedef struct {
     const char *content;
     int waiting_time;
+    bool override_previous;
+    void (*callback)(void);
 } bootup_sequence_line;
 
-bootup_sequence_line bootup_sequence[] = {{"...", 500}, {"Starting up system", 1000}};
+bootup_sequence_line bootup_sequence[] = {
+    {"NyxLoader Boot Loader v1.4", 500, false, &bootseq_beep},
+    {"Loading Kernel", 500, false, NULL},
+    {"Loading Kernel .", 500, true, NULL},
+    {"Loading Kernel ..", 1000, true, NULL},
+    {"Loading Kernel ...", 500, true, NULL},
+    {"Loading Kernel ... OK", 200, true, NULL},
+    {"Passing control to kernel", 200, false, NULL},
+    {"", 600, false, NULL},
+    {"HemeraKernel v2.4.1", 100, false, NULL},
+    {"Copyright (c) 1987 HemeraLabs", 100, false, NULL},
+    {"", 600, false, NULL},
+    {"CPU: h512X3 @ 66MHz", 100, false, NULL},
+    {"Memory: 12MB detected", 100, false, NULL},
+    {"", 600, false, NULL},
+    {"Probing system components", 1000, false, NULL},
+    {"Probing system components .", 1000, true, NULL},
+    {"Probing system components ..", 1000, true, NULL},
+    {"Probing system components ...", 1000, true, NULL},
+    {"ART bus detected", 100, false, NULL},
+    {"PRC bus detected", 100, false, NULL},
+    {"", 600, false, NULL},
+    {"Mounting root filesystem .", 300, false, NULL},
+    {"Mounting root filesystem ..", 300, true, NULL},
+    {"Mounting root filesystem ...", 300, true, NULL},
+    {"Root mounted from AO0 at /", 300, false, NULL},
+    {"", 600, false, NULL},
+    {"Bringing up network interfaces .", 300, false, NULL},
+    {"Bringing up network interfaces ..", 300, true, NULL},
+    {"Bringing up network interfaces ...", 300, true, NULL},
+    {"Available network interfaces:", 300, false, NULL},
+    {"lo0: loopback configured", 300, false, NULL},
+    {"eth0: address 00:40:12:3A:9F:2C", 300, false, NULL},
+    {"", 600, false, NULL},
+    {"Getting IP address for eth0", 1000, false, NULL},
+    {"eth0: 192.168.1.96", 300, false, NULL},
+    {"", 600, false, NULL},
+    {"Network ready.", 300, false, NULL},
+    {"Starting up user environment .", 300, false, NULL},
+    {"Starting up user environment ..", 300, true, NULL},
+    {"Starting up user environment ...", 300, true, NULL},
+    {"Starting up user environment ... OK", 300, true, NULL},
+    {"", 600, false, NULL},
+    {"Welcome to HemeraOS v1.0.2 (Ciros)", 4000, false, NULL},
+};
 const int bootup_sequence_count = sizeof(bootup_sequence) / sizeof(bootup_sequence[0]);
 
 int bootup_sequence_idx = -1;
-float bootup_sequence_line_time_left = 400;
+float bootup_sequence_line_time_left = 1000;
 
 #define DISABLE_BOOTUP_SEQUENCE 1
 
@@ -1750,12 +1803,28 @@ int bootup_sequence_update(terminal *term, void *args) {
     (void)args;
     term->title = "Booting System";
     bootup_sequence_line_time_left -= GetFrameTime() * 1000;
-    if (bootup_sequence_line_time_left < 0) {
-        bootup_sequence_idx++;
-        if (bootup_sequence_idx == bootup_sequence_count) {
-            return 1;
+    if (1) {
+        if (bootup_sequence_line_time_left < 0) {
+            bootup_sequence_idx++;
+            if (bootup_sequence_idx == bootup_sequence_count) {
+                return 1;
+            }
+            bootup_sequence_line_time_left = bootup_sequence[bootup_sequence_idx].waiting_time;
+            if (bootup_sequence[bootup_sequence_idx].callback) {
+                bootup_sequence[bootup_sequence_idx].callback();
+            }
         }
-        bootup_sequence_line_time_left = bootup_sequence[bootup_sequence_idx].waiting_time;
+    } else {
+        if (IsKeyPressed(KEY_N)) {
+            bootup_sequence_idx++;
+            if (bootup_sequence_idx == bootup_sequence_count) {
+                return 1;
+            }
+            bootup_sequence_line_time_left = bootup_sequence[bootup_sequence_idx].waiting_time;
+            if (bootup_sequence[bootup_sequence_idx].callback) {
+                bootup_sequence[bootup_sequence_idx].callback();
+            }
+        }
     }
     return 0;
 }
@@ -1763,14 +1832,49 @@ int bootup_sequence_update(terminal *term, void *args) {
 void bootup_sequence_render(terminal *term, void *args) {
     (void)term;
     (void)args;
+
+    int real_line_count = 0;
     for (int i = 0; i <= bootup_sequence_idx; i++) {
-        DrawTerminalLine(bootup_sequence[i].content, i);
+        if (bootup_sequence[i].override_previous == false) {
+            real_line_count++;
+        }
+    }
+
+    int line = -1;
+    int start_line = fmax(0, real_line_count - MAX_LINE_COUNT_PER_SCREEN);
+
+    int real_start = 0;
+    int current_line = 0;
+    for (int i = 0; i < bootup_sequence_idx; i++) {
+        if (bootup_sequence[i].override_previous == false) {
+            current_line++;
+        }
+        if (current_line == start_line) {
+            real_start = i;
+            break;
+        }
+    }
+
+    for (int i = real_start; i <= bootup_sequence_idx; i++) {
+        if (bootup_sequence[i].override_previous == false) {
+            line++;
+        }
+        DrawTerminalLine(bootup_sequence[i].content, line);
+    }
+
+    if (bootup_sequence_idx >= 0) {
+        if ((int)GetTime() % 2 == 0) {
+            int x = 60 + MeasureTextEx(terminal_font, bootup_sequence[bootup_sequence_idx].content, font_size, 1).x + 8;
+            int y = 40 + font_size * (line + 1);
+            DrawRectangle(x, y, 10, font_size, WHITE);
+        }
     }
 }
 
 int main() {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(WIDTH, HEIGHT, "TUIGame");
+    InitAudioDevice();
     SetTargetFPS(60);
 
     terminal_shader = LoadShader(0, "shaders/pixeliser.fs");
@@ -1789,6 +1893,7 @@ int main() {
     active_term = &all_terminals[0];
     active_term->process_update = bootup_sequence_update;
     active_term->process_render = bootup_sequence_render;
+    bootseq_init();
 
     while (!WindowShouldClose()) {
         if (active_term->process_update == NULL) {

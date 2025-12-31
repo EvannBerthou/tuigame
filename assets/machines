@@ -4,12 +4,7 @@ hostname: machine1
 ip: 192.168.1.96
 network: 0
 files: 
-- /test/:
-- /abc:1\n2\n3\n4\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\nbonjour!!\n
-- /x:FOR i IN 1..10;\n    PUTPIXEL 14 13 2;\n    RENDER;\n    SLEEP 1;\nEND\n
-- /test/sub/:
-- /test/sub/encoresub/:
-- /test/sub/encoresub/fichier:
+- /x:PRINT "START";\nframe = 0;\nWHILE frame < 10;\n    FOR px IN 0..80;\n        FOR py IN 0..60;\n            PUTPIXEL px py px+py+frame/3;\n        END\n    END\n    RENDER;\n    frame = frame + 1;\nEND\n\nPRINT "END";\nPRINT "END";\nPRINT "END";\n
 ---
 hostname: machine3
 ip: 10.0.0.1
