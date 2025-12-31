@@ -1,8 +1,6 @@
 A = 1;
 B = 0;
 
-PRINT "OK?";
-
 ith = 0;
 WHILE B < 10000000;
     PRINT "F(" ith ") = " B;
@@ -11,5 +9,3 @@ WHILE B < 10000000;
     B = tmp + B;
     ith = ith + 1;
 END
-
-PRINT "FIN";

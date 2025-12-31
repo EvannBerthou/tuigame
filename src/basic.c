@@ -113,15 +113,6 @@ void destroy_interpreter() {
     interpreter_arena = NULL;
 }
 
-#define append(l, x)                                                               \
-    do {                                                                           \
-        if ((l)->count == (l)->capacity) {                                         \
-            (l)->capacity = (l)->capacity == 0 ? 64 : (l)->capacity * 2;           \
-            (l)->items = realloc((l)->items, sizeof(*(l)->items) * (l)->capacity); \
-        }                                                                          \
-        (l)->items[(l)->count++] = (x);                                            \
-    } while (0)
-
 token next(const char *input) {
     while (isspace(*input))
         input++;

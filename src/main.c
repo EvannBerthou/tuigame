@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "arena.h"
 #include "basic.h"
 #include "bootseq.h"
 #include "commands.h"
@@ -1659,36 +1660,60 @@ bool TextEmpty(const char *s) {
     return true;
 }
 
+typedef struct {
+    char **items;
+    int count;
+    int capacity;
+} text_lines;
+
+text_lines text_split(char *content, char sep) {
+    text_lines result = {0};
+
+    if (content == NULL) {
+        return result;
+    }
+
+    char *s = content;
+    append(&result, s);
+    while (*s) {
+        if (*s == sep) {
+            *s = '\0';
+            s++;
+            append(&result, s);
+        } else {
+            s++;
+        }
+    }
+    return result;
+}
+
 void load_machines() {
-    const char *file_content = LoadFileText("assets/machines");
-    int line_count = 0;
-    // TODO: Cropped on file too big
-    const char **lines = TextSplit(file_content, '\n', &line_count);
-    terminal_count = TextToInteger(lines[0]);
+    char *file_content = LoadFileText("assets/machines");
+    text_lines lines = text_split(file_content, '\n');
+    terminal_count = TextToInteger(lines.items[0]);
     all_terminals = calloc(terminal_count, sizeof(terminal));
     int machine_idx = -1;
 
     bool parsing_files = false;
-    for (int i = 1; i < line_count; i++) {
-        if (strcmp(lines[i], "---") == 0) {
+    for (int i = 1; i < lines.count; i++) {
+        if (strcmp(lines.items[i], "---") == 0) {
             machine_idx++;
             parsing_files = false;
             continue;
         }
-        if (TextEmpty(lines[i])) {
+        if (TextEmpty(lines.items[i])) {
             continue;
         }
         if (parsing_files) {
-            if (lines[i][0] == '-') {
-                lines[i] += 2;
-                int split_index = TextFindIndex(lines[i], ":");
+            if (lines.items[i][0] == '-') {
+                lines.items[i] += 2;
+                int split_index = TextFindIndex(lines.items[i], ":");
                 if (!split_index) {
                     printf("Error parsing file at line %d\n", i);
                     exit(1);
                 }
-                char *file = (char *)TextSubtext(lines[i], 0, split_index);
-                const char *content = lines[i] + split_index + 1;
-                printf("File %s content = '%s'\n", file, content);
+                char *file = (char *)TextSubtext(lines.items[i], 0, split_index);
+                const char *content = lines.items[i] + split_index + 1;
                 if (file[strlen(file) - 1] == '/') {
                     file[strlen(file) - 1] = '\0';
                     file_node_append_folder_full_path(all_terminals[machine_idx].fs.root, file);
@@ -1701,10 +1726,10 @@ void load_machines() {
             continue;
         }
         terminal *current = &all_terminals[machine_idx];
-        int split_index = TextFindIndex(lines[i], ": ");
+        int split_index = TextFindIndex(lines.items[i], ": ");
         if (split_index) {
-            const char *key = TextSubtext(lines[i], 0, split_index);
-            const char *value = lines[i] + split_index + 2;
+            const char *key = TextSubtext(lines.items[i], 0, split_index);
+            const char *value = lines.items[i] + split_index + 2;
             if (strcmp(key, "hostname") == 0) {
                 current->hostname = strdup(value);
             } else if (strcmp(key, "ip") == 0) {
@@ -1735,6 +1760,7 @@ void load_machines() {
             }
         }
     }
+    free(file_content);
 }
 
 typedef struct {
@@ -1801,7 +1827,7 @@ int bootup_sequence_update(terminal *term, void *args) {
     return 1;
 #endif
     (void)args;
-    term->title = "Booting System";
+    term->title = NULL;
     bootup_sequence_line_time_left -= GetFrameTime() * 1000;
     if (1) {
         if (bootup_sequence_line_time_left < 0) {
@@ -1859,13 +1885,15 @@ void bootup_sequence_render(terminal *term, void *args) {
         if (bootup_sequence[i].override_previous == false) {
             line++;
         }
-        DrawTerminalLine(bootup_sequence[i].content, line);
+        DrawTerminalLine(bootup_sequence[i].content, line - 1);
     }
 
     if (bootup_sequence_idx >= 0) {
         if ((int)GetTime() % 2 == 0) {
-            int x = 60 + MeasureTextEx(terminal_font, bootup_sequence[bootup_sequence_idx].content, font_size, 1).x + 8;
-            int y = 40 + font_size * (line + 1);
+            int x_offset = bootup_sequence[bootup_sequence_idx].content[0] == '\0' ? 60 : 68;
+            int x =
+                x_offset + MeasureTextEx(terminal_font, bootup_sequence[bootup_sequence_idx].content, font_size, 1).x;
+            int y = 40 + font_size * line;
             DrawRectangle(x, y, 10, font_size, WHITE);
         }
     }
