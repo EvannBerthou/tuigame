@@ -35,7 +35,7 @@
     X(FOR)       \
     X(IN)        \
     X(WHILE)     \
-    X(FUNCTION)  \
+    X(FUNC)      \
     X(END)       \
     X(TRUE)      \
     X(FALSE)
@@ -59,17 +59,36 @@ typedef struct stmt_funcall stmt_funcall;
 typedef enum {
     SYMBOL_NONE,
     SYMBOL_FUNCTION,
+    SYMBOL_FUNCTION_NATIVE,
     SYMBOL_VARIABLE_INT,
     SYMBOL_VARIABLE_STRING,
 } symbol_type;
 
+typedef enum {
+    SCOPE_GLOBAL,
+    SCOPE_LOCAL,
+} symbol_scope;
+
+typedef struct stmt stmt;
+
 typedef struct {
     const char *name;
     symbol_type type;
+    symbol_scope scope;
+    size_t scope_depth;
     union {
-        void (*function)(stmt_funcall *);
+        struct {
+            void (*function)(stmt_funcall *);
+            bool variadic_arg_count;
+            size_t arg_count;
+        } native_func;
         int integer;
         const char *string;
+        struct {
+            stmt *body;
+            const char **args;
+            size_t arg_count;
+        } funcdecl;
     } as;
 } symbol;
 
@@ -84,6 +103,17 @@ typedef struct stmt stmt;
 #define MAX_SYMBOL_COUNT 2048
 
 typedef struct {
+    stmt *return_stmt;
+    size_t stack_idx;
+} return_call;
+
+typedef struct {
+    return_call *items;
+    int count;
+    int capacity;
+} return_stack;
+
+typedef struct {
     void (*print_fn)(const char *text);
     void (*append_print_fn)(const char *text);
     symbol symbols_table[MAX_SYMBOL_COUNT];
@@ -91,6 +121,8 @@ typedef struct {
 
     interpreter_state state;
     stmt *pc;
+    return_stack returns;
+    size_t scope_depth;
 
     float time_elapsed;
     float wakeup_time;
@@ -98,7 +130,9 @@ typedef struct {
 
 void init_interpreter(basic_interpreter *i, const char *src);
 bool step_program(basic_interpreter *i);
-void register_function(basic_interpreter *i, const char *name, void (*f)(stmt_funcall *));
+void register_function(const char *name, void (*f)(stmt_funcall *), int arg_count);
+void register_variable_int(const char *name, int value);
+void register_variable_string(const char *name, const char *value);
 void advance_interpreter_time(basic_interpreter *i, float time);
 void destroy_interpreter();
 

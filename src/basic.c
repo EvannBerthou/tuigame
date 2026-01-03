@@ -1,4 +1,3 @@
-// TODO: Memory leaks everywhere
 #include "basic.h"
 #include <ctype.h>
 #include <setjmp.h>
@@ -71,6 +70,8 @@ typedef enum {
     STMT_WHILE,
     STMT_WHILEEND,
     STMT_VARIABLE,
+    STMT_FUNCDECL,
+    STMT_RETURN,
 } stmt_type;
 
 typedef struct stmt stmt;
@@ -82,6 +83,7 @@ typedef struct {
 typedef struct {
     const char *variable;
     int min, max, step;
+    size_t stack_saved;
 } stmt_for;
 
 typedef struct {
@@ -93,6 +95,16 @@ typedef struct {
     expr expr;
 } stmt_variable;
 
+typedef struct {
+    const char *name;
+    struct {
+        const char **items;
+        int count;
+        int capacity;
+    } args;
+    stmt *body;
+} stmt_funcdecl;
+
 struct stmt {
     stmt_type type;
     union {
@@ -101,6 +113,7 @@ struct stmt {
         stmt_for stmt_for;
         stmt_while stmt_while;
         stmt_variable stmt_variable;
+        stmt_funcdecl stmt_funcdecl;
     } as;
 
     stmt *next;
@@ -133,11 +146,11 @@ token next(const char *input) {
             ERR("Mismatching '\"'");
         }
         input++;
-    } else if (isalpha(*input) || *input == '$') {
+    } else if (isalpha(*input) || *input == '$' || *input == '_') {
         result.type = TOKEN_IDENTIFIER;
         if (*input == '$')
             input++;
-        while (isalnum(*input))
+        while (isalnum(*input) || *input == '_')
             input++;
     } else if (isdigit(*input)) {
         result.type = TOKEN_NUMBER;
@@ -593,6 +606,47 @@ stmt *parse_while() {
     return result;
 }
 
+stmt *parse_funcdecl() {
+    stmt *result = arena_alloc(interpreter_arena, sizeof(*result));
+    result->type = STMT_FUNCDECL;
+    result->next = NULL;
+    result->jmp = NULL;
+
+    stmt_funcdecl *fundecl_stmt = &result->as.stmt_funcdecl;
+    token *func_name = expect(TOKEN_IDENTIFIER);
+    fundecl_stmt->name = tok_to_str(func_name);
+    fundecl_stmt->args.items = NULL;
+    fundecl_stmt->args.count = 0;
+    fundecl_stmt->args.capacity = 0;
+    expect(TOKEN_LPAREN);
+    while (peek_type(TOKEN_IDENTIFIER)) {
+        token *arg = expect(TOKEN_IDENTIFIER);
+        append(&fundecl_stmt->args, tok_to_str(arg));
+    }
+    expect(TOKEN_RPAREN);
+    expect(TOKEN_SEMICOLON);
+
+    stmt *body = parse_block();
+
+    stmt *end = arena_alloc(interpreter_arena, sizeof(*end));
+    end->type = STMT_NOP;
+    end->next = NULL;
+    end->jmp = NULL;
+
+    stmt *return_stmt = arena_alloc(interpreter_arena, sizeof(*return_stmt));
+    return_stmt->type = STMT_RETURN;
+    return_stmt->next = end;
+    return_stmt->jmp = NULL;
+
+    stmt_tail(body)->next = return_stmt;
+
+    result->next = body;
+    result->jmp = end;
+
+    expect_kw(KW_END);
+    return result;
+}
+
 stmt *parse_keyword() {
     token *t = expect(TOKEN_KEYWORD);
     switch (t->keyword) {
@@ -602,8 +656,8 @@ stmt *parse_keyword() {
             return parse_if();
         case KW_FOR:
             return parse_for();
-        case KW_FUNCTION:
-            ERR("TODO %s\n", keywords[t->keyword]);
+        case KW_FUNC:
+            return parse_funcdecl();
         case KW_WHILE:
             return parse_while();
         case KW_ELSE:
@@ -646,29 +700,31 @@ stmt *parse_block() {
 }
 
 symbol *get_symbol(const char *name) {
-    for (size_t i = 0; i < MAX_SYMBOL_COUNT; i++) {
+    for (int i = global_interpreter->symbol_count - 1; i >= 0; i--) {
         symbol *s = &global_interpreter->symbols_table[i];
         if (s && s->type != SYMBOL_NONE && strcmp(s->name, name) == 0) {
-            return &global_interpreter->symbols_table[i];
+            if (s->scope == SCOPE_GLOBAL ||
+                (s->scope == SCOPE_LOCAL && s->scope_depth == global_interpreter->scope_depth)) {
+                return &global_interpreter->symbols_table[i];
+            }
         }
     }
+
     return NULL;
 }
 
-symbol *create_symbol(const char *name, symbol_type type) {
-    if (get_symbol(name) != NULL) {
-        ERR("Symbol %s already exists", name);
+symbol *get_symbol_id(size_t idx) {
+    return &global_interpreter->symbols_table[idx];
+}
+
+size_t create_symbol(const char *name, symbol_type type) {
+    if (global_interpreter->symbol_count == MAX_SYMBOL_COUNT) {
+        ERR("No more space to allocate more symbols");
     }
-    for (size_t i = 0; i < MAX_SYMBOL_COUNT; i++) {
-        symbol *loop_variable = &global_interpreter->symbols_table[i];
-        if (loop_variable->type == SYMBOL_NONE) {
-            loop_variable->name = name;
-            loop_variable->type = type;
-            global_interpreter->symbol_count++;
-            return loop_variable;
-        }
-    }
-    ERR("No more space to allocate more symbols");
+    symbol *s = &global_interpreter->symbols_table[global_interpreter->symbol_count];
+    s->name = name;
+    s->type = type;
+    return global_interpreter->symbol_count++;
 }
 
 value eval_expr(expr *e);
@@ -702,18 +758,6 @@ void sleep_fn(stmt_funcall *call) {
     value v = eval_expr(&call->items[0]);
     global_interpreter->wakeup_time = global_interpreter->time_elapsed + v.as.number;
     global_interpreter->state = STATE_SLEEPING;
-}
-
-void call_function(stmt *s) {
-    stmt_funcall call = s->as.stmt_funcall;
-    symbol *function = get_symbol(call.function);
-    if (function == NULL) {
-        ERR("Unknow function '%s'\n", call.function);
-    }
-    if (function->type != SYMBOL_FUNCTION) {
-        ERR("%s is not a function\n", call.function);
-    }
-    function->as.function(&call);
 }
 
 value value_is_num(value v) {
@@ -808,17 +852,35 @@ bool is_true(value v) {
     ERR("Unknown value type");
 }
 
-void register_function(basic_interpreter *i, const char *name, void (*f)(stmt_funcall *)) {
-    i->symbols_table[i->symbol_count].type = SYMBOL_FUNCTION;
-    i->symbols_table[i->symbol_count].name = name;
-    i->symbols_table[i->symbol_count].as.function = f;
-    i->symbol_count++;
+void register_function(const char *name, void (*f)(stmt_funcall *), int arg_count) {
+    symbol *s = get_symbol_id(create_symbol(name, SYMBOL_FUNCTION_NATIVE));
+    s->as.native_func.function = f;
+    if (arg_count < 0) {
+        s->as.native_func.arg_count = 0;
+        s->as.native_func.variadic_arg_count = true;
+    } else {
+        s->as.native_func.arg_count = arg_count;
+    }
 }
 
-void register_std_lib(basic_interpreter *i) {
-    register_function(i, "PRINT", print_fn);
-    register_function(i, "EXIT", exit_fn);
-    register_function(i, "SLEEP", sleep_fn);
+void register_variable_int(const char *name, int value) {
+    symbol *s = get_symbol_id(create_symbol(name, SYMBOL_VARIABLE_INT));
+    s->scope_depth = 0;
+    s->scope = SCOPE_GLOBAL;
+    s->as.integer = value;
+}
+
+void register_variable_string(const char *name, const char *value) {
+    symbol *s = get_symbol_id(create_symbol(name, SYMBOL_VARIABLE_STRING));
+    s->scope_depth = 0;
+    s->scope = SCOPE_GLOBAL;
+    s->as.string = value;
+}
+
+void register_std_lib() {
+    register_function("PRINT", print_fn, -1);
+    register_function("EXIT", exit_fn, 1);
+    register_function("SLEEP", sleep_fn, 1);
 }
 
 void init_interpreter(basic_interpreter *i, const char *src) {
@@ -834,7 +896,7 @@ void init_interpreter(basic_interpreter *i, const char *src) {
         destroy_interpreter();
         return;
     }
-    register_std_lib(i);
+    register_std_lib();
     lexical_analysis(src);
     i->pc = parse_block();
     expect(TOKEN_EOF);
@@ -864,10 +926,78 @@ bool step_program(basic_interpreter *i) {
         return false;
     }
     switch (s->type) {
-        case STMT_FUNCALL:
-            call_function(s);
-            i->pc = s->next;
+        case STMT_FUNCALL: {
+            stmt_funcall call = s->as.stmt_funcall;
+            symbol *function = get_symbol(call.function);
+            if (function == NULL) {
+                ERR("Unknow function '%s'\n", call.function);
+            }
+            switch (function->type) {
+                case SYMBOL_FUNCTION_NATIVE: {
+                    // TODO: Args
+                    if ((size_t)s->as.stmt_funcall.count != function->as.native_func.arg_count &&
+                        function->as.native_func.variadic_arg_count == false) {
+                        ERR("Function %s expected %d arguments but recieved %d", function->name,
+                            function->as.funcdecl.arg_count, s->as.stmt_funcall.count);
+                    }
+                    function->as.native_func.function(&call);
+                    i->pc = s->next;
+                    break;
+                }
+                case SYMBOL_FUNCTION: {
+                    int function_arg_count = function->as.funcdecl.arg_count;
+                    if (s->as.stmt_funcall.count != function_arg_count) {
+                        ERR("Function %s expected %d arguments but recieved %d", function->name,
+                            function->as.funcdecl.arg_count, s->as.stmt_funcall.count);
+                    }
+
+                    size_t saved = interpreter_arena->ptr;
+                    symbol *args = arena_alloc(interpreter_arena, sizeof(*args) * function->as.funcdecl.arg_count);
+                    for (int i = 0; i < function_arg_count; i++) {
+                        value v = eval_expr(&s->as.stmt_funcall.items[i]);
+                        switch (v.type) {
+                            case VAL_NUM:
+                                args[i].type = SYMBOL_VARIABLE_INT;
+                                args[i].as.integer = v.as.number;
+                                break;
+                            case VAL_STRING:
+                                args[i].type = SYMBOL_VARIABLE_STRING;
+                                args[i].as.string = v.as.string;
+                                break;
+                        }
+                    }
+
+                    size_t pop_idx = global_interpreter->symbol_count;
+                    global_interpreter->scope_depth++;
+
+                    for (int i = 0; i < function_arg_count; i++) {
+                        symbol *new = get_symbol_id(create_symbol(function->as.funcdecl.args[i], args[i].type));
+                        new->scope = SCOPE_LOCAL;
+                        new->scope_depth = global_interpreter->scope_depth;
+                        switch (new->type) {
+                            case SYMBOL_VARIABLE_INT:
+                                new->as.integer = args[i].as.integer;
+                                break;
+                            case SYMBOL_VARIABLE_STRING:
+                                new->as.string = args[i].as.string;
+                                break;
+                            default:
+                                ERR("Unexpected type %d for fonction argument", new->type);
+                        }
+                    }
+
+                    return_call r = {s->next, pop_idx};
+                    append(&i->returns, r);
+                    i->pc = function->as.funcdecl.body;
+
+                    interpreter_arena->ptr = saved;
+                    break;
+                }
+                default:
+                    ERR("%s is not a function\n", call.function);
+            }
             break;
+        }
         case STMT_IF:
             if (is_true(eval_expr(&s->as.stmt_if.condition))) {
                 i->pc = s->next;
@@ -878,11 +1008,15 @@ bool step_program(basic_interpreter *i) {
         case STMT_FOR: {
             symbol *var = get_symbol(s->as.stmt_for.variable);
             if (var == NULL) {
-                var = create_symbol(s->as.stmt_for.variable, SYMBOL_VARIABLE_INT);
+                s->as.stmt_for.stack_saved = global_interpreter->symbol_count;
+                var = get_symbol_id(create_symbol(s->as.stmt_for.variable, SYMBOL_VARIABLE_INT));
                 var->as.integer = s->as.stmt_for.min;
+                var->scope = SCOPE_LOCAL;
+                var->scope_depth = global_interpreter->scope_depth;
             }
             if (var->as.integer == s->as.stmt_for.max) {
                 i->pc = s->next;
+                global_interpreter->symbol_count = s->as.stmt_for.stack_saved;
             } else {
                 i->pc = s->jmp;
             }
@@ -890,13 +1024,12 @@ bool step_program(basic_interpreter *i) {
         }
         case STMT_FOREND: {
             symbol *var = get_symbol(s->as.stmt_for.variable);
-            if (var->as.integer == s->as.stmt_for.max) {
+            if (var == NULL) {
                 i->pc = s->next;
-                var->type = SYMBOL_NONE;
-                break;
+            } else {
+                var->as.integer += s->as.stmt_for.step;
+                i->pc = s->jmp;
             }
-            var->as.integer += s->as.stmt_for.step;
-            i->pc = s->jmp;
             break;
         }
         case STMT_NOP:
@@ -912,19 +1045,23 @@ bool step_program(basic_interpreter *i) {
                 }
             } else {
                 if (v.type == VAL_NUM) {
-                    var = create_symbol(name, SYMBOL_VARIABLE_INT);
+                    var = get_symbol_id(create_symbol(name, SYMBOL_VARIABLE_INT));
                 } else if (v.type == VAL_STRING) {
-                    var = create_symbol(name, SYMBOL_VARIABLE_STRING);
+                    var = get_symbol_id(create_symbol(name, SYMBOL_VARIABLE_STRING));
                 } else {
-                    ERR("Unknown value type %d\n", v.type);
+                    ERR("Unknown value type %d", v.type);
                 }
+                var->scope = global_interpreter->scope_depth == 0 ? SCOPE_GLOBAL : SCOPE_LOCAL;
+                var->scope_depth = global_interpreter->scope_depth;
             }
-            if (var->type == SYMBOL_VARIABLE_INT) {
+            if (v.type == VAL_NUM) {
+                var->type = SYMBOL_VARIABLE_INT;
                 var->as.integer = v.as.number;
-            } else if (var->type == SYMBOL_VARIABLE_STRING) {
+            } else if (v.type == VAL_STRING) {
+                var->type = SYMBOL_VARIABLE_STRING;
                 var->as.string = v.as.string;
             } else {
-                ERR("Unknown symbol type %d\n", var->type);
+                ERR("Unknown symbol type %d", var->type);
             }
             i->pc = s->next;
             break;
@@ -937,6 +1074,21 @@ bool step_program(basic_interpreter *i) {
             } else {
                 i->pc = s->next;
             }
+            break;
+        }
+        case STMT_FUNCDECL: {
+            symbol *var = get_symbol_id(create_symbol(s->as.stmt_funcdecl.name, SYMBOL_FUNCTION));
+            var->as.funcdecl.body = s->next;
+            var->as.funcdecl.args = s->as.stmt_funcdecl.args.items;
+            var->as.funcdecl.arg_count = s->as.stmt_funcdecl.args.count;
+            i->pc = s->jmp;
+            break;
+        }
+        case STMT_RETURN: {
+            return_call r = pop(&i->returns);
+            i->pc = r.return_stmt;
+            global_interpreter->symbol_count = r.stack_idx;
+            global_interpreter->scope_depth--;
             break;
         }
     }

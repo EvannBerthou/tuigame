@@ -1,11 +1,1 @@
-A = 1;
-B = 0;
-
-ith = 0;
-WHILE B < 10000000;
-    PRINT "F(" ith ") = " B;
-    tmp = A;
-    A = B;
-    B = tmp + B;
-    ith = ith + 1;
-END
+PRINT COLOR_RED;

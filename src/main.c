@@ -541,6 +541,7 @@ void terminal_replace_last_line(terminal *term, const char *text) {
 }
 
 void terminal_basic_print(const char *text) {
+    printf("%s", text);
     if (*text == '\n') {
         terminal_append_log(active_term, "");
     } else {
@@ -549,6 +550,7 @@ void terminal_basic_print(const char *text) {
 }
 
 void terminal_append_print(const char *text) {
+    printf("[Basic]: %s", text);
     terminal_log_append_text(active_term, text);
 }
 
@@ -1129,8 +1131,16 @@ int exec_init(terminal *t, int argc, const char **argv) {
     memset(p->fb[1], 0, sizeof(*p->fb[1]) * FB_SIZE);
     terminal_append_log(t, "");
     init_interpreter(&p->interpreter, file->content);
-    register_function(&p->interpreter, "PUTPIXEL", put_pixel_fn);
-    register_function(&p->interpreter, "RENDER", flip_render_fn);
+    register_function("PUTPIXEL", put_pixel_fn, 3);
+    register_function("RENDER", flip_render_fn, 0);
+    register_function("COLOR_RED", flip_render_fn, 0);
+    register_variable_int("COLOR_BG", TERM_BG);
+    register_variable_int("COLOR_FG", TERM_FG);
+    register_variable_int("COLOR_BLUE", TERM_BLUE);
+    register_variable_int("COLOR_GREEN", TERM_GREEN);
+    register_variable_int("COLOR_RED", TERM_RED);
+    register_variable_int("COLOR_YELLOW", TERM_YELLOW);
+    register_variable_int("COLOR_PURPLE", TERM_PURPLE);
     t->args = p;
     return 0;
 }

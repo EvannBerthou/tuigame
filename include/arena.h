@@ -12,6 +12,8 @@
         (l)->items[(l)->count++] = (x);                                            \
     } while (0)
 
+#define pop(l) (l)->items[--(l)->count]
+
 typedef struct {
     char *content;
     size_t ptr;
