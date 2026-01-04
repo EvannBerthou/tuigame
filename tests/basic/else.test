@@ -1,0 +1,8 @@
+No
+---
+X = 2;
+IF X >= 3;
+    PRINT "Yes";
+ELSE
+    PRINT "No";
+END

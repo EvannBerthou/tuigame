@@ -1,0 +1,13 @@
+1
+Middle
+3
+---
+I = 1;
+WHILE I <= 3;
+    IF I == 2;
+        PRINT "Middle";
+    ELSE
+        PRINT I;
+    END
+    I = I + 1;
+END

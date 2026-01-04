@@ -1,0 +1,8 @@
+1
+2
+3
+4
+---
+FOR i IN 1..5;
+    PRINT i;
+END

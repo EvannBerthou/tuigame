@@ -5,8 +5,8 @@ ip: 192.168.1.96
 network: 0
 files: 
 - /dossier/:
-- /x:PRINT COLOR_RED;\n
-- /julia:S = 100; \nMAXITER = 16; \nLIMIT = 4 * S * S; \nJCX = -70; \nJCY = 27; \nFOR px IN 0..80; \n    FOR py IN 0..60; \n        x = (px - 40) * 2 * S / 40; \n        y = (py - 30) * 2 * S / 30; \n\n        iter = 0; \n        escaped = 0; \n\n        FOR i IN 1..16; \n            IF escaped == 0; \n                xx = (x*x - y*y) / S + JCX; \n                yy = (2*x*y) / S + JCY; \n\n                x = xx; \n                y = yy; \n\n                IF (x*x + y*y) > LIMIT; \n                    escaped = 1; \n                    iter = i; \n                END \n            END \n        END \n        IF escaped == 0; \n            PUTPIXEL px py 7; \n        ELSE \n            PUTPIXEL px py iter + 1; \n        END \n    END \nEND \n\nRENDER;\n\nWHILE TRUE;\n    SLEEP 10;\nEND\n\n
+- /x:FUNC F();\n    PRINT "123";\n    PRINT "456";\nEND\n\nSLEEP F;\n
+- /julia:S = 100; \nMAXITER = 16; \nLIMIT = 4 * S * S; \nJCX = -89; \nJCY = 30; \nFOR px IN 0..80; \n    FOR py IN 0..60; \n        x = (px - 40) * 2 * S / 40; \n        y = (py - 30) * 2 * S / 30; \n\n        iter = 0; \n        escaped = 0; \n\n        FOR i IN 1..16; \n            IF escaped == 0; \n                xx = (x*x - y*y) / S + JCX; \n                yy = (2*x*y) / S + JCY; \n\n                x = xx; \n                y = yy; \n\n                IF (x*x + y*y) > LIMIT; \n                    escaped = 1; \n                    iter = i; \n                END \n            END \n        END \n        IF escaped == 0; \n            PUTPIXEL px py 7; \n        ELSE \n            PUTPIXEL px py iter + 1; \n        END \n    END \nEND \n\nRENDER;\n\nWHILE TRUE;\n    SLEEP 10;\nEND\n\n
 - /dossier/sub/:
 - /dossier/sub/encore/:
 - /dossier/sub/encore/fichier:bonjour je suis deep\n

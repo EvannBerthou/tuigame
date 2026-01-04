@@ -1,0 +1,7 @@
+5
+---
+FUNC INC(x);
+    PRINT x + 1;
+END
+
+INC 4;

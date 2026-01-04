@@ -1,0 +1,9 @@
+True
+---
+FUNC F();
+    x = 1;
+END
+
+IF F;
+    PRINT "True";
+END

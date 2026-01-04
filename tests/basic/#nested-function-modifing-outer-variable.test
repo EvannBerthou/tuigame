@@ -1,0 +1,20 @@
+Outer: 1
+Inner: 2
+Outer again: 3
+---
+X = 1;
+
+FUNC OUTER();
+    X = X + 1;
+    Y = 2;
+    FUNC INNER();
+        Y = Y + 1;
+        X = X + 1;
+        PRINT "Inner: " Y;
+    END
+    INNER();
+    PRINT "Outer again: " X;
+END
+
+OUTER();
+PRINT "Outer: " X;

@@ -1,8 +1,8 @@
 S = 100; 
 MAXITER = 16; 
 LIMIT = 4 * S * S; 
-JCX = -70; 
-JCY = 27; 
+JCX = -89; 
+JCY = 30; 
 FOR px IN 0..80; 
     FOR py IN 0..60; 
         x = (px - 40) * 2 * S / 40; 

@@ -1,0 +1,14 @@
+Outer: 5
+Inner: 10
+Outer again: 10
+---
+X = 5;
+
+FUNC F();
+    X = 10;
+    PRINT "Inner: " X;
+END
+
+PRINT "Outer: " X;
+F;
+PRINT "Outer again: " X;

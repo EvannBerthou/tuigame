@@ -1,0 +1,11 @@
+0
+1
+2
+---
+FUNC SHOW(x);
+    PRINT x;
+END
+
+FOR i IN 0..3;
+    SHOW i;
+END

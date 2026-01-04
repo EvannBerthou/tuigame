@@ -36,6 +36,7 @@
     X(IN)        \
     X(WHILE)     \
     X(FUNC)      \
+    X(RETURN)    \
     X(END)       \
     X(TRUE)      \
     X(FALSE)
@@ -94,17 +95,21 @@ typedef struct {
 
 typedef enum {
     STATE_RUNNING,
+    STATE_EXPR_EVALUATION,  // TODO
     STATE_FINISHED,
     STATE_SLEEPING,
 } interpreter_state;
 
 typedef struct stmt stmt;
+typedef struct expr expr;
 
 #define MAX_SYMBOL_COUNT 2048
 
 typedef struct {
     stmt *return_stmt;
     size_t stack_idx;
+    bool is_expr_call;
+    int expr_pc;
 } return_call;
 
 typedef struct {
@@ -114,27 +119,10 @@ typedef struct {
 } return_stack;
 
 typedef struct {
-    void (*print_fn)(const char *text);
-    void (*append_print_fn)(const char *text);
-    symbol symbols_table[MAX_SYMBOL_COUNT];
-    size_t symbol_count;
-
-    interpreter_state state;
-    stmt *pc;
-    return_stack returns;
-    size_t scope_depth;
-
-    float time_elapsed;
-    float wakeup_time;
-} basic_interpreter;
-
-void init_interpreter(basic_interpreter *i, const char *src);
-bool step_program(basic_interpreter *i);
-void register_function(const char *name, void (*f)(stmt_funcall *), int arg_count);
-void register_variable_int(const char *name, int value);
-void register_variable_string(const char *name, const char *value);
-void advance_interpreter_time(basic_interpreter *i, float time);
-void destroy_interpreter();
+    expr **items;
+    int count;
+    int capacity;
+} expr_stack;
 
 typedef enum { VAL_NUM, VAL_STRING } value_type;
 
@@ -147,8 +135,6 @@ typedef struct {
 } value;
 
 typedef enum { EXPR_STRING, EXPR_NUMBER, EXPR_VAR, EXPR_BINARY, EXPR_UNARY } expr_type;
-
-typedef struct expr expr;
 
 typedef struct {
     token_type op;
@@ -179,6 +165,81 @@ struct stmt_funcall {
     int capacity;
 };
 
+typedef enum {
+    OP_PUSH_NUMBER,
+    OP_PUSH_STRING,
+    OP_PUSH_VAR,
+    OP_UNARY_OP,
+    OP_BINARY_OP,
+    OP_CALL_FUNC,
+    OP_NOP
+} expr_op_type;
+
+typedef struct {
+    expr_op_type type;
+    union {
+        int number;
+        const char *string;
+        const char *variable;
+        token_type op;
+        struct {
+            const char *name;
+            int argc;
+        } func;
+    } as;
+} expr_op;
+
+typedef struct {
+    expr_op *items;
+    int count;
+    int capacity;
+} expr_ops;
+
+typedef struct {
+    value *items;
+    int count;
+    int capacity;
+} value_stack;
+
+typedef struct {
+    expr_ops plan;
+    size_t plan_idx;
+    size_t value_stack_idx;
+} expr_frame;
+
+typedef struct {
+    expr_frame *items;
+    int count;
+    int capacity;
+} expr_frame_stack;
+
+typedef struct {
+    void (*print_fn)(const char *text);
+    void (*append_print_fn)(const char *text);
+    symbol symbols_table[MAX_SYMBOL_COUNT];
+    size_t symbol_count;
+
+    interpreter_state state;
+    stmt *pc;
+    return_stack returns;
+    size_t scope_depth;
+
+    expr_frame_stack expr_frames;
+    expr_ops current_expr_plan;
+    size_t current_expr_plan_idx;
+    value_stack values_stack;
+
+    float time_elapsed;
+    float wakeup_time;
+} basic_interpreter;
+
 value eval_expr(expr *e);
+void init_interpreter(basic_interpreter *i, const char *src);
+bool step_program(basic_interpreter *i);
+void register_function(const char *name, void (*f)(stmt_funcall *), int arg_count);
+void register_variable_int(const char *name, int value);
+void register_variable_string(const char *name, const char *value);
+void advance_interpreter_time(basic_interpreter *i, float time);
+void destroy_interpreter();
 
 #endif

@@ -1,0 +1,19 @@
+1
+1 1
+1 2 1
+1 3 3 1
+---
+FUNC COMB(n, k);
+    IF k == 0 or k == n;
+        RETURN 1;
+    ELSE
+        RETURN COMB n - 1, k - 1 + COMB n - 1, k;
+    END
+END
+
+FOR n IN 0..4;
+    FOR k IN 0..n+1;
+        PRINT COMB n, k " ";
+    END
+    PRINT "";
+END

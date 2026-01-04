@@ -1,1 +1,4 @@
-PRINT COLOR_RED;
+FUNC F();
+    1 + 1;
+END
+PRINT F;

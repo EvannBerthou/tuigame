@@ -1,0 +1,9 @@
+3
+2
+1
+---
+I = 3;
+WHILE I > 0;
+    PRINT I;
+    I = I - 1;
+END

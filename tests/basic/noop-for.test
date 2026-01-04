@@ -1,0 +1,4 @@
+---
+FOR i IN 2..2;
+    PRINT i;
+END

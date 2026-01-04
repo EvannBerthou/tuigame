@@ -1,0 +1,23 @@
+0
+1
+1
+2
+3
+5
+8
+13
+21
+---
+F[0] = 0;
+F[1] = 1;
+
+FUNC FIB(n);
+    IF n >= 2;
+        F[n] = FIB n - 1 + FIB n - 2;
+    END
+    RETURN F[n];
+END
+
+FOR i IN 0..10;
+    PRINT FIB i;
+END

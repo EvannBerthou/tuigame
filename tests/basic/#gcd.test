@@ -1,0 +1,12 @@
+6
+---
+FUNC GCD(a, b);
+    WHILE b != 0;
+        t = b;
+        b = a % b;
+        a = t;
+    END
+    RETURN a;
+END
+
+PRINT GCD 48 18;

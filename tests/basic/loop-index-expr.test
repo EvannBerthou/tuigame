@@ -1,0 +1,9 @@
+0
+1
+2
+3
+---
+X = 3;
+FOR i IN 0..X + 1;
+    PRINT i;
+END

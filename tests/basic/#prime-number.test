@@ -1,0 +1,22 @@
+2
+3
+5
+7
+---
+FUNC ISPRIME(n);
+    IF n < 2;
+        RETURN 0;
+    END
+    FOR i IN 2..n;
+        IF n % i == 0 && i != n;
+            RETURN 0;
+        END
+    END
+    RETURN 1;
+END
+
+FOR i IN 0..10;
+    IF ISPRIME i;
+        PRINT i;
+    END
+END

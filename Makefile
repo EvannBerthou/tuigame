@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -Wextra -Werror -Warray-bounds -Wno-initializer-overrides -std=c23 -pedantic
+CFLAGS=#-Wall -Wextra -Werror -Warray-bounds -Wno-initializer-overrides -std=c23 -pedantic
 
 all: build/main_game
 

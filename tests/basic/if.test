@@ -1,0 +1,6 @@
+Big
+---
+X = 10;
+IF X > 5;
+    PRINT "Big";
+END
