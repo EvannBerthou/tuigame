@@ -212,6 +212,7 @@ typedef enum {
     STMT_WHILEEND,
     STMT_VARIABLE,
     STMT_FUNCDECL,
+    STMT_FUNCTION_EXIT,
     STMT_RETURN,
 } stmt_type;
 
@@ -251,6 +252,10 @@ typedef struct {
     stmt *body;
 } stmt_funcdecl;
 
+typedef struct {
+    expr expr;
+} stmt_return;
+
 struct stmt {
     stmt_type type;
     union {
@@ -261,6 +266,7 @@ struct stmt {
         stmt_while stmt_while;
         stmt_variable stmt_variable;
         stmt_funcdecl stmt_funcdecl;
+        stmt_return stmt_return;
     } as;
 
     stmt *next;
@@ -272,6 +278,7 @@ typedef enum {
     CONT_ASSIGN,
     CONT_IF,
     CONT_DISCARD,
+    CONT_RETURN,
 } continuation_type;
 
 typedef struct {

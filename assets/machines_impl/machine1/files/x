@@ -1,12 +1,7 @@
 FUNC F();
-    PRINT "123";
-    4 * 4;
-    PRINT "457";
-    6 * 4;
-    PRINT "";
+    RETURN TRUE;
 END
 
-X = F;
-X = F;
-X = F;
-PRINT X;
+IF F;
+    PRINT "True";
+END

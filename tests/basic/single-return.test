@@ -1,7 +1,6 @@
-100
+12
 ---
 FUNC F();
-    10 * 10;
+    RETURN 12;
 END
-
 PRINT F;

@@ -4,4 +4,5 @@ FUNC INC(x);
     PRINT x + 1;
 END
 
-INC 4;
+X = INC 4;
+PRINT X;

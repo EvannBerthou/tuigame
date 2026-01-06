@@ -1,7 +1,7 @@
 True
 ---
 FUNC F();
-    1;
+    RETURN TRUE;
 END
 
 IF F;

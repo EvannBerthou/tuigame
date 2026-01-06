@@ -1,0 +1,10 @@
+False
+---
+FUNC F();
+    IF 0;
+        RETURN "True";
+    ELSE
+        RETURN "False";
+    END
+END
+PRINT F;

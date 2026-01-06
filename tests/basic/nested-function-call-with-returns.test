@@ -1,0 +1,11 @@
+25
+---
+FUNC B();
+    RETURN 25;
+END
+
+FUNC A();
+    RETURN B;
+END
+
+PRINT A;

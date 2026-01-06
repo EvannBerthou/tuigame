@@ -38,24 +38,30 @@ arena *interpreter_arena = NULL;
 jmp_buf err_jmp;
 int error_line = 0;
 
-int underDebugger = 0;
-bool runningUnderDebugger() {
-    static bool isCheckedAlready = false;
-    if (!isCheckedAlready) {
-        if (ptrace(PTRACE_TRACEME, 0, 1, 0) < 0)
-            underDebugger = 1;
-        else
+// NOTE: from https://forum.juce.com/t/detecting-if-a-process-is-being-run-under-a-debugger/2098
+bool in_debugger() {
+    static int is_in_debugger = -1;
+    if (is_in_debugger == -1) {
+        if (ptrace(PTRACE_TRACEME, 0, 1, 0) < 0) {
+            is_in_debugger = 1;
+        } else {
             ptrace(PTRACE_DETACH, 0, 1, 0);
-
-        isCheckedAlready = true;
+            is_in_debugger = 0;
+        }
     }
-    return underDebugger == 1;
+    return is_in_debugger;
 }
+
+#define BREAKPOINT()         \
+    do {                     \
+        if (in_debugger()) { \
+            asm("int3");     \
+        }                    \
+    } while (0)
 
 #define ERR(msg, ...)                                    \
     do {                                                 \
-        if (runningUnderDebugger())                      \
-            asm("int3");                                 \
+        BREAKPOINT();                                    \
         interpreter_log(msg __VA_OPT__(, ) __VA_ARGS__); \
         error_line = __LINE__;                           \
         longjmp(err_jmp, 1);                             \
@@ -330,7 +336,7 @@ stmt *parse_funcall(token *function) {
         end->jmp = NULL;
 
         stmt *return_stmt = arena_alloc(interpreter_arena, sizeof(*return_stmt));
-        return_stmt->type = STMT_RETURN;
+        return_stmt->type = STMT_FUNCTION_EXIT;
         return_stmt->next = end;
         return_stmt->jmp = NULL;
 
@@ -632,16 +638,37 @@ stmt *parse_funcdecl() {
     end->jmp = NULL;
 
     stmt *return_stmt = arena_alloc(interpreter_arena, sizeof(*return_stmt));
-    return_stmt->type = STMT_RETURN;
+    return_stmt->type = STMT_FUNCTION_EXIT;
     return_stmt->next = end;
     return_stmt->jmp = NULL;
 
     stmt_tail(body)->next = return_stmt;
 
+    stmt *s = body;
+    while (s && s != return_stmt) {
+        if (s->type == STMT_RETURN) {
+            s->next = return_stmt;
+        }
+        s = s->next;
+    }
+
     result->next = body;
     result->jmp = end;
 
     expect_kw(KW_END);
+    return result;
+}
+
+stmt *parse_return() {
+    stmt *result = arena_alloc(interpreter_arena, sizeof(*result));
+    result->type = STMT_RETURN;
+    result->next = NULL;
+    result->jmp = NULL;
+
+    result->as.stmt_return.expr = parse_expr();
+
+    expect(TOKEN_SEMICOLON);
+
     return result;
 }
 
@@ -656,6 +683,8 @@ stmt *parse_keyword() {
             return parse_for();
         case KW_FUNC:
             return parse_funcdecl();
+        case KW_RETURN:
+            return parse_return();
         case KW_WHILE:
             return parse_while();
         case KW_ELSE:
@@ -664,9 +693,6 @@ stmt *parse_keyword() {
             ERR("Unexpected keyword %s\n", keywords[t->keyword]);
         case KW_TRUE:
         case KW_FALSE:
-            break;
-        case KW_RETURN:
-            ERR("TODO: Return");
             break;
     }
     return NULL;
@@ -939,18 +965,26 @@ bool is_true(value v) {
     ERR("Unknown value type");
 }
 
+void discard_current_frame() {
+    pop(&global_interpreter->expr_frames);
+    global_interpreter->current_expr_plan.items = NULL;
+    global_interpreter->current_expr_plan.count = 0;
+    global_interpreter->current_expr_plan.capacity = 0;
+    global_interpreter->current_expr_plan_idx = 0;
+}
+
 void eval_continuation() {
     if (global_interpreter->expr_frames.count == 0) {
         ERR("No more frames ?");
     }
     expr_frame frame = global_interpreter->expr_frames.items[global_interpreter->expr_frames.count - 1];
-    continuation *c = &frame.continuation;
-    switch (c->type) {
+    continuation c = frame.continuation;
+    switch (c.type) {
         case CONT_NONE:
             break;
         case CONT_ASSIGN: {
             value v = pop(&global_interpreter->values_stack);
-            const char *name = c->as.stmt_assign.variable;
+            const char *name = c.as.stmt_assign.variable;
             symbol *var = get_symbol(name);
             if (var) {
                 if (var->type == SYMBOL_FUNCTION) {
@@ -977,25 +1011,42 @@ void eval_continuation() {
                 ERR("Unknown symbol type %d", var->type);
             }
             global_interpreter->state = STATE_RUNNING;
-            global_interpreter->pc = c->as.stmt_assign.next;
+            global_interpreter->pc = c.as.stmt_assign.next;
+            discard_current_frame();
             break;
         }
         case CONT_IF:
+            BREAKPOINT();
+            // discard_current_frame();
             value v = pop(&global_interpreter->values_stack);
             if (is_true(v)) {
-                global_interpreter->pc = c->as.stmt_if.if_branch;
+                global_interpreter->pc = c.as.stmt_if.if_branch;
             } else {
-                global_interpreter->pc = c->as.stmt_if.else_branch;
+                global_interpreter->pc = c.as.stmt_if.else_branch;
             }
             global_interpreter->state = STATE_RUNNING;
+            frame = pop(&global_interpreter->expr_frames);
+            global_interpreter->current_expr_plan = frame.plan;
+            global_interpreter->current_expr_plan_idx = frame.plan_idx;
+            global_interpreter->values_stack.count = frame.value_stack_idx;
             break;
         case CONT_DISCARD: {
-            pop(&global_interpreter->expr_frames);
+            discard_current_frame();
             pop(&global_interpreter->values_stack);
             global_interpreter->state = STATE_RUNNING;
-            global_interpreter->pc = c->as.stmt_discard.next;
+            global_interpreter->pc = c.as.stmt_discard.next;
             break;
         }
+        case CONT_RETURN:
+            if (global_interpreter->pc->type == STMT_FUNCTION_EXIT) {
+                global_interpreter->state = STATE_EXPR_EVALUATION;
+            } else {
+                global_interpreter->state = STATE_RUNNING;
+                global_interpreter->pc = global_interpreter->pc->next;
+            }
+            break;
+        default:
+            ERR("Unknown continuation type");
     }
 }
 
@@ -1012,7 +1063,7 @@ bool step_expr() {
             break;
         }
         case OP_PUSH_NUMBER: {
-            value v = {VAL_NUM, .as.string = expr->as.string};
+            value v = {VAL_NUM, .as.number = expr->as.number};
             append(&global_interpreter->values_stack, v);
             global_interpreter->current_expr_plan_idx++;
             break;
@@ -1125,7 +1176,9 @@ bool step_expr() {
                 function->as.native_func.function(NULL);
                 global_interpreter->state = STATE_RUNNING;
                 // Will call return
-                global_interpreter->pc = global_interpreter->pc->next;
+                if (global_interpreter->pc->type != STMT_FUNCTION_EXIT) {
+                    global_interpreter->pc = global_interpreter->pc->next;
+                }
                 global_interpreter->current_expr_plan_idx++;
                 break;
             }
@@ -1274,15 +1327,7 @@ bool step_program(basic_interpreter *i) {
                 ERR("Unknow function '%s'\n", call.function);
             }
             switch (function->type) {
-                // TODO: Something does not work with
-                /*
-                 * FUNC F();
-                 *     2;
-                 * END
-                 * PRINT F;
-                 */
                 case SYMBOL_FUNCTION_NATIVE: {
-                    // TODO: Figure why there is a double next only for this case
                     return_call r = {.return_stmt = s->next->next,
                                      .stack_idx = global_interpreter->symbol_count,
                                      .is_expr_call = false};
@@ -1316,6 +1361,9 @@ bool step_program(basic_interpreter *i) {
             continuation c = {.type = CONT_IF, .as.stmt_if = {.if_branch = s->next, .else_branch = s->jmp}};
             expr_save_frame_new(c);
             build_expr_plan(&s->as.stmt_if.condition);
+            expr_ops *ops = &global_interpreter->current_expr_plan;
+            expr_op op = {OP_NOP};
+            append(ops, op);
             global_interpreter->state = STATE_EXPR_EVALUATION;
             break;
         }
@@ -1362,6 +1410,9 @@ bool step_program(basic_interpreter *i) {
             continuation c = {.type = CONT_ASSIGN, .as.stmt_assign = {.variable = name, .next = s->next}};
             expr_save_frame_new(c);
             build_expr_plan(&s->as.stmt_variable.expr);
+            expr_ops *ops = &global_interpreter->current_expr_plan;
+            expr_op op = {OP_NOP};
+            append(ops, op);
             global_interpreter->state = STATE_EXPR_EVALUATION;
             break;
         }
@@ -1383,7 +1434,7 @@ bool step_program(basic_interpreter *i) {
             i->pc = s->jmp;
             break;
         }
-        case STMT_RETURN: {
+        case STMT_FUNCTION_EXIT: {
             if (i->returns.count == 0) {
                 printf("No more return\n");
                 return false;
@@ -1420,11 +1471,20 @@ bool step_program(basic_interpreter *i) {
             }
             break;
         }
-        case STMT_EXPR:
+        case STMT_RETURN: {
+            expr_save_frame_new((continuation){CONT_RETURN});
+            build_expr_plan(&s->as.stmt_return.expr);
+            global_interpreter->state = STATE_EXPR_EVALUATION;
+            break;
+        }
+        case STMT_EXPR: {
             expr_save_frame_new((continuation){CONT_DISCARD, .as.stmt_discard.next = s->next});
             build_expr_plan(&s->as.stmt_expr.expr);
             global_interpreter->state = STATE_EXPR_EVALUATION;
             break;
+        }
+        default:
+            ERR("Unknown statement");
     }
 
     return true;

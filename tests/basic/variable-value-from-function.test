@@ -1,7 +1,0 @@
-7
----
-FUNC F();
-    2 * 3 + 1;
-END
-X = F;
-PRINT X;
