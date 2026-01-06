@@ -1037,14 +1037,6 @@ void eval_continuation() {
             global_interpreter->pc = c.as.stmt_discard.next;
             break;
         }
-        case CONT_RETURN:
-            if (global_interpreter->pc->type == STMT_FUNCTION_EXIT) {
-                global_interpreter->state = STATE_EXPR_EVALUATION;
-            } else {
-                global_interpreter->state = STATE_RUNNING;
-                global_interpreter->pc = global_interpreter->pc->next;
-            }
-            break;
         default:
             ERR("Unknown continuation type");
     }
@@ -1182,8 +1174,9 @@ bool step_expr() {
                 global_interpreter->current_expr_plan_idx++;
                 break;
             }
-            expr_save_frame_resume((continuation){0});
+            // expr_save_frame_resume((continuation){0});
             schedule_expr_function_call(function->name, 0, function->as.funcdecl.body);
+            global_interpreter->current_expr_plan_idx++;
             return true;
         }
         case OP_NOP:
@@ -1250,12 +1243,48 @@ void init_interpreter(basic_interpreter *i, const char *src) {
     i->state = STATE_RUNNING;
 }
 
+void do_function_exit() {
+    if (global_interpreter->returns.count == 0) {
+        ERR("No more return\n");
+    }
+
+    return_call r = pop(&global_interpreter->returns);
+    global_interpreter->symbol_count = r.stack_idx;
+    global_interpreter->scope_depth--;
+
+    value ret = {.type = VAL_NUM, .as.number = 0};
+    if (global_interpreter->values_stack.count > 0) {
+        ret = pop(&global_interpreter->values_stack);
+    }
+
+    if (!r.is_expr_call) {
+        global_interpreter->pc = r.return_stmt;
+        global_interpreter->state = STATE_RUNNING;
+    } else {
+        global_interpreter->state = STATE_EXPR_EVALUATION;
+
+        expr_frame frame = pop(&global_interpreter->expr_frames);
+        global_interpreter->current_expr_plan = frame.plan;
+        global_interpreter->current_expr_plan_idx = frame.plan_idx;
+        global_interpreter->values_stack.count = frame.value_stack_idx;
+
+        append(&global_interpreter->values_stack, ret);
+    }
+
+    global_interpreter->pending_return = false;
+}
+
 bool state_expr_evaluation() {
     if (step_expr()) {
         return true;
     }
 
     if ((int)global_interpreter->current_expr_plan_idx < global_interpreter->current_expr_plan.count) {
+        return true;
+    }
+
+    if (global_interpreter->pending_return) {
+        do_function_exit();
         return true;
     }
 
@@ -1349,7 +1378,9 @@ bool step_program(basic_interpreter *i) {
                                      .stack_idx = global_interpreter->symbol_count,
                                      .is_expr_call = false};
                     append(&global_interpreter->returns, r);
-                    schedule_expr_function_call(call.function, call.count, function->as.funcdecl.body);
+                    expr_save_frame_new((continuation){CONT_DISCARD, .as.stmt_discard.next = s->next});
+                    build_funcall_plan(&call);
+                    global_interpreter->state = STATE_EXPR_EVALUATION;
                     break;
                 }
                 default:
@@ -1435,46 +1466,14 @@ bool step_program(basic_interpreter *i) {
             break;
         }
         case STMT_FUNCTION_EXIT: {
-            if (i->returns.count == 0) {
-                printf("No more return\n");
-                return false;
-            }
-
-            return_call r = pop(&i->returns);
-            global_interpreter->symbol_count = r.stack_idx;
-            global_interpreter->scope_depth--;
-
-            value ret = {.type = VAL_NUM, .as.number = 0};
-            if (global_interpreter->values_stack.count > 0) {
-                ret = pop(&global_interpreter->values_stack);
-            }
-            append(&global_interpreter->values_stack, ret);
-
-            if (!r.is_expr_call) {
-                expr_frame frame = pop(&global_interpreter->expr_frames);
-                i->current_expr_plan = frame.plan;
-                i->current_expr_plan_idx = frame.plan_idx;
-                i->values_stack.count = frame.value_stack_idx;
-
-                i->pc = r.return_stmt;
-                i->state = STATE_RUNNING;
-                break;
-            }
-
-            eval_continuation();
-            if (global_interpreter->state != STATE_RUNNING) {
-                expr_frame frame = pop(&global_interpreter->expr_frames);
-                i->current_expr_plan = frame.plan;
-                i->current_expr_plan_idx = frame.plan_idx;
-                i->values_stack.count = frame.value_stack_idx;
-                append(&global_interpreter->values_stack, ret);
-            }
+            do_function_exit();
             break;
         }
         case STMT_RETURN: {
-            expr_save_frame_new((continuation){CONT_RETURN});
+            expr_save_frame_new((continuation){CONT_DISCARD, .as.stmt_discard.next = s->next});
             build_expr_plan(&s->as.stmt_return.expr);
             global_interpreter->state = STATE_EXPR_EVALUATION;
+            global_interpreter->pending_return = true;
             break;
         }
         case STMT_EXPR: {

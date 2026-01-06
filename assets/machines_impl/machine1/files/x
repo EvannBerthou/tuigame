@@ -1,10 +1,6 @@
-X = 5;
-
 FUNC F();
-    X = 10;
-    PRINT "Inner: " X;
+    RETURN 1;
 END
 
-PRINT "Outer: " X;
-F;
-PRINT "Outer again: " X;
+X = F;
+PRINT X;

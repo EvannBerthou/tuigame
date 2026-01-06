@@ -278,7 +278,6 @@ typedef enum {
     CONT_ASSIGN,
     CONT_IF,
     CONT_DISCARD,
-    CONT_RETURN,
 } continuation_type;
 
 typedef struct {
@@ -330,6 +329,8 @@ typedef struct {
 
     float time_elapsed;
     float wakeup_time;
+
+    bool pending_return;
 } basic_interpreter;
 
 value eval_expr(expr *e);
