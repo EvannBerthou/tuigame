@@ -1,7 +1,10 @@
+X = 5;
+
 FUNC F();
-    RETURN TRUE;
+    X = 10;
+    PRINT "Inner: " X;
 END
 
-IF F;
-    PRINT "True";
-END
+PRINT "Outer: " X;
+F;
+PRINT "Outer again: " X;

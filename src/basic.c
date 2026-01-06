@@ -1339,7 +1339,7 @@ bool step_program(basic_interpreter *i) {
                         ERR("Function %s expected %d arguments but recieved %d", function->name,
                             function->as.funcdecl.arg_count, s->as.stmt_funcall.count);
                     }
-                    expr_save_frame_new((continuation){CONT_NONE});
+                    expr_save_frame_new((continuation){CONT_DISCARD, .as.stmt_discard.next = s->next});
                     build_funcall_plan(&call);
                     global_interpreter->state = STATE_EXPR_EVALUATION;
                     break;

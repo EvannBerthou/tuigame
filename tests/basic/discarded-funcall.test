@@ -1,0 +1,9 @@
+CALLED
+OK
+---
+FUNC F();
+    PRINT "CALLED";
+END
+
+F;
+PRINT "OK";
