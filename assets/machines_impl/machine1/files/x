@@ -1,6 +1,6 @@
 FUNC F();
-    RETURN 1;
+    PRINT "CALLED";
 END
 
-X = F;
-PRINT X;
+F;
+PRINT "OK";

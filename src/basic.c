@@ -630,24 +630,33 @@ stmt *parse_funcdecl() {
     expect(TOKEN_RPAREN);
     expect(TOKEN_SEMICOLON);
 
-    stmt *body = parse_block();
-
     stmt *end = arena_alloc(interpreter_arena, sizeof(*end));
     end->type = STMT_NOP;
     end->next = NULL;
     end->jmp = NULL;
 
-    stmt *return_stmt = arena_alloc(interpreter_arena, sizeof(*return_stmt));
-    return_stmt->type = STMT_FUNCTION_EXIT;
-    return_stmt->next = end;
-    return_stmt->jmp = NULL;
+    stmt *function_exit_stmt = arena_alloc(interpreter_arena, sizeof(*function_exit_stmt));
+    function_exit_stmt->type = STMT_FUNCTION_EXIT;
+    function_exit_stmt->next = end;
+    function_exit_stmt->jmp = NULL;
 
-    stmt_tail(body)->next = return_stmt;
+    stmt *body = parse_block();
+    stmt *last_stmt = stmt_tail(body);
+    if (last_stmt->type != STMT_RETURN) {
+        stmt *return_stmt = arena_alloc(interpreter_arena, sizeof(*return_stmt));
+        return_stmt->type = STMT_RETURN;
+        return_stmt->next = NULL;
+        return_stmt->jmp = NULL;
+        return_stmt->as.stmt_return.expr = (expr){.type = EXPR_NUMBER, .as.number = 0};
+        last_stmt->next = return_stmt;
+        last_stmt = return_stmt;
+    }
+    last_stmt->next = function_exit_stmt;
 
     stmt *s = body;
-    while (s && s != return_stmt) {
+    while (s && s != function_exit_stmt) {
         if (s->type == STMT_RETURN) {
-            s->next = return_stmt;
+            s->next = function_exit_stmt;
         }
         s = s->next;
     }
@@ -1261,6 +1270,9 @@ void do_function_exit() {
         global_interpreter->pc = r.return_stmt;
         global_interpreter->state = STATE_RUNNING;
     } else {
+        if (global_interpreter->expr_frames.count == 0) {
+            ERR("Missing expression frame for function return");
+        }
         global_interpreter->state = STATE_EXPR_EVALUATION;
 
         expr_frame frame = pop(&global_interpreter->expr_frames);
