@@ -1,4 +1,12 @@
 FUNC F();
-    1 + 1;
+    PRINT "123";
+    4 * 4;
+    PRINT "457";
+    6 * 4;
+    PRINT "";
 END
-PRINT F;
+
+X = F;
+X = F;
+X = F;
+PRINT X;

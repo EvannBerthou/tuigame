@@ -1,7 +1,6 @@
 No
 ---
-X = 2;
-IF X >= 3;
+IF FALSE;
     PRINT "Yes";
 ELSE
     PRINT "No";

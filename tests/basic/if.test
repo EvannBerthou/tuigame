@@ -1,6 +1,5 @@
 Big
 ---
-X = 10;
-IF X > 5;
+IF 2 > 1;
     PRINT "Big";
 END

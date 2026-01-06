@@ -201,10 +201,102 @@ typedef struct {
     int capacity;
 } value_stack;
 
+typedef enum {
+    STMT_NOP,
+    STMT_EXPR,
+    STMT_FUNCALL,
+    STMT_IF,
+    STMT_FOR,
+    STMT_FOREND,
+    STMT_WHILE,
+    STMT_WHILEEND,
+    STMT_VARIABLE,
+    STMT_FUNCDECL,
+    STMT_RETURN,
+} stmt_type;
+
+typedef struct stmt stmt;
+
+typedef struct {
+    expr expr;
+} stmt_expr;
+
+typedef struct {
+    expr condition;
+} stmt_if;
+
+typedef struct {
+    const char *variable;
+    expr min;
+    expr max;
+    size_t stack_saved;
+} stmt_for;
+
+typedef struct {
+    expr condition;
+} stmt_while;
+
+typedef struct {
+    const char *variable;
+    expr expr;
+} stmt_variable;
+
+typedef struct {
+    const char *name;
+    struct {
+        const char **items;
+        int count;
+        int capacity;
+    } args;
+    stmt *body;
+} stmt_funcdecl;
+
+struct stmt {
+    stmt_type type;
+    union {
+        stmt_expr stmt_expr;
+        stmt_funcall stmt_funcall;
+        stmt_if stmt_if;
+        stmt_for stmt_for;
+        stmt_while stmt_while;
+        stmt_variable stmt_variable;
+        stmt_funcdecl stmt_funcdecl;
+    } as;
+
+    stmt *next;
+    stmt *jmp;
+};
+
+typedef enum {
+    CONT_NONE,
+    CONT_ASSIGN,
+    CONT_IF,
+    CONT_DISCARD,
+} continuation_type;
+
+typedef struct {
+    continuation_type type;
+    union {
+        struct {
+            const char *variable;
+            stmt *next;
+        } stmt_assign;
+        struct {
+            stmt *if_branch;
+            stmt *else_branch;
+        } stmt_if;
+        struct {
+            stmt *next;
+        } stmt_discard;
+    } as;
+} continuation;
+
 typedef struct {
     expr_ops plan;
     size_t plan_idx;
     size_t value_stack_idx;
+    continuation continuation;
+    bool own_returns;
 } expr_frame;
 
 typedef struct {
