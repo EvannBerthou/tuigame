@@ -3,9 +3,9 @@
 2
 ---
 FUNC SHOW(x);
-    PRINT x;
+    PRINT(x);
 END
 
 FOR i IN 0..3;
-    SHOW i;
+    SHOW(i);
 END

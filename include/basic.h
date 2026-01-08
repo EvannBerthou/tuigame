@@ -134,7 +134,7 @@ typedef struct {
     } as;
 } value;
 
-typedef enum { EXPR_STRING, EXPR_NUMBER, EXPR_VAR, EXPR_BINARY, EXPR_UNARY } expr_type;
+typedef enum { EXPR_STRING, EXPR_NUMBER, EXPR_VAR, EXPR_BINARY, EXPR_UNARY, EXPR_FUNCALL } expr_type;
 
 typedef struct {
     token_type op;
@@ -147,6 +147,15 @@ typedef struct {
     expr *right;
 } expr_binary;
 
+typedef struct {
+    const char *name;
+    struct {
+        expr *items;
+        int count;
+        int capacity;
+    } args;
+} expr_funcall;
+
 struct expr {
     expr_type type;
     union {
@@ -155,6 +164,7 @@ struct expr {
         const char *variable;
         expr_unary *unary;
         expr_binary *binary;
+        expr_funcall funcall;
     } as;
 };
 

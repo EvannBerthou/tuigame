@@ -5,7 +5,7 @@ FUNC B();
 END
 
 FUNC A();
-    RETURN B;
+    RETURN B();
 END
 
-PRINT A;
+PRINT(A());

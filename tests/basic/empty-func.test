@@ -3,5 +3,5 @@ OK
 FUNC F();
 END
 
-F;
-PRINT "OK";
+F();
+PRINT("OK");

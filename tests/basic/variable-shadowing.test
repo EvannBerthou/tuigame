@@ -6,9 +6,9 @@ X = 5;
 
 FUNC F();
     X = 10;
-    PRINT "Inner: " X;
+    PRINT("Inner: " X);
 END
 
-PRINT "Outer: " X;
-F;
-PRINT "Outer again: " X;
+PRINT("Outer: " X);
+F();
+PRINT("Outer again: " X);

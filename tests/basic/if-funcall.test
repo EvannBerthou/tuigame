@@ -4,6 +4,6 @@ FUNC F();
     RETURN TRUE;
 END
 
-IF F;
-    PRINT "True";
+IF F();
+    PRINT("True");
 END

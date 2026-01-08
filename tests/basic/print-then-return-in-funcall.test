@@ -1,0 +1,9 @@
+A
+1
+---
+FUNC A();
+    PRINT("A");
+    RETURN 1;
+END
+
+PRINT(A());

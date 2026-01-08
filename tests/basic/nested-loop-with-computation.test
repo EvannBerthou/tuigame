@@ -6,6 +6,6 @@
 FOR i IN 0..2;
     FOR j IN 0..2;
         k = i * j;
-        PRINT i " " j " " k;
+        PRINT(i " " j " " k);
     END
 END

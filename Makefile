@@ -26,4 +26,10 @@ analysis:
 basic: src/basic.c
 	$(CC) $(CFLAGS) -I./include src/basic.c src/arena.c -o build/basic -ggdb -DBASIC_TEST
 
+test: basic
+	python tools/basic-test.py
+
+debug: basic
+	gf2 ./build/basic
+
 .PHONY: all run clean machines_builder build_docs analysis

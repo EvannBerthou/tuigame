@@ -1,7 +1,7 @@
-4
+6
 ---
 FUNC DOUBLE(x);
     RETURN x * 2;
 END
 
-PRINT DOUBLE(2);
+PRINT(DOUBLE(3));

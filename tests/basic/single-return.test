@@ -3,4 +3,4 @@
 FUNC F();
     RETURN 12;
 END
-PRINT F;
+PRINT(F());

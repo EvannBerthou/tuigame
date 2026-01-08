@@ -1,6 +1,6 @@
 ---
 X = 10;
 WHILE X < 0;
-    PRINT X;
+    PRINT(X);
     X = X - 1;
 END

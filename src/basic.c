@@ -327,26 +327,28 @@ stmt *parse_funcall(token *function) {
     funcall->capacity = 0;
     funcall->count = 0;
 
-    while (!peek_type(TOKEN_SEMICOLON) && !peek_type(TOKEN_UNEXPECTED) && !peek_type(TOKEN_EOF)) {
+    expect(TOKEN_LPAREN);
+    while (!peek_type(TOKEN_SEMICOLON) && !peek_type(TOKEN_UNEXPECTED) && !peek_type(TOKEN_EOF) &&
+           !peek_type(TOKEN_RPAREN)) {
         expr e = parse_expr();
         append(funcall, e);
     }
+    expect(TOKEN_RPAREN);
 
     symbol *s = get_symbol(funcall->function);
     if (s != NULL && s->type == SYMBOL_FUNCTION_NATIVE) {
+        stmt *function_exit_stmt = arena_alloc(interpreter_arena, sizeof(*function_exit_stmt));
+        function_exit_stmt->type = STMT_FUNCTION_EXIT;
+        function_exit_stmt->next = NULL;
+        function_exit_stmt->jmp = NULL;
+
         stmt *end = arena_alloc(interpreter_arena, sizeof(*end));
         end->type = STMT_NOP;
         end->next = NULL;
         end->jmp = NULL;
 
-        stmt *return_stmt = arena_alloc(interpreter_arena, sizeof(*return_stmt));
-        return_stmt->type = STMT_FUNCTION_EXIT;
-        return_stmt->next = end;
-        return_stmt->jmp = NULL;
-
-        result->next = return_stmt;
-
-        result->jmp = end;
+        function_exit_stmt->next = end;
+        result->next = function_exit_stmt;
     }
 
     expect(TOKEN_SEMICOLON);
@@ -367,9 +369,7 @@ stmt *parse_variable(token *variable) {
 
 stmt *parse_identifier() {
     token *identifier = parser_next();
-    token *next = parser_peek();
-
-    if (next->type == TOKEN_EQUAL) {
+    if (peek_type(TOKEN_EQUAL)) {
         parser_next();  // Skipping =
         return parse_variable(identifier);
     } else {
@@ -400,6 +400,19 @@ expr_unary *make_unary(token_type op, expr e) {
 //   As in : how to handle X F 1 2 => X (F() 1 2), X (F(1) 2), X (F(1 2))
 expr parse_identifier_expr() {
     token *tok = expect(TOKEN_IDENTIFIER);
+    if (peek_type(TOKEN_LPAREN)) {
+        expr_funcall result = {0};
+        result.name = tok_to_str(tok);
+
+        parser_next();
+        while (parser_peek()->type != TOKEN_RPAREN) {
+            expr e = parse_expr();
+            append(&result.args, e);
+        }
+
+        expect(TOKEN_RPAREN);
+        return (expr){EXPR_FUNCALL, .as.funcall = result};
+    }
     return (expr){EXPR_VAR, .as.variable = tok_to_str(tok)};
 }
 
@@ -429,7 +442,7 @@ expr parse_primary() {
         expect(TOKEN_RPAREN);
         return e;
     }
-    ERR("Expected expression\n");
+    ERR("Unexpected %s in expr parsing\n", token_string[parser_peek()->type]);
 }
 
 expr parse_unary() {
@@ -800,11 +813,15 @@ void print_fn(stmt_funcall *call) {
     expr_frame *top_frame = &global_interpreter->expr_frames.items[global_interpreter->expr_frames.count - 1];
     size_t start = top_frame->value_stack_idx;
     size_t end = global_interpreter->values_stack.count;
+    BREAKPOINT();
 
     for (size_t i = start; i < end; i++) {
-        print_val(&global_interpreter->values_stack.items[i]);
+        value v = pop(&global_interpreter->values_stack);
+        print_val(&v);
     }
     interpreter_log("\n");
+    value result = {.type = VAL_NUM, .as.number = 0};
+    append(&global_interpreter->values_stack, result);
 }
 
 void exit_fn(stmt_funcall *call) {
@@ -814,9 +831,8 @@ void exit_fn(stmt_funcall *call) {
 
 void sleep_fn(stmt_funcall *call) {
     (void)call;
-    // TODO: arg
-    //  value v = eval_expr(&call->items[0]);
-    global_interpreter->wakeup_time = global_interpreter->time_elapsed + 1;  // v.as.number;
+    value v = pop(&global_interpreter->values_stack);
+    global_interpreter->wakeup_time = global_interpreter->time_elapsed + v.as.number;
     global_interpreter->state = STATE_SLEEPING;
 }
 
@@ -832,6 +848,8 @@ value eval_expr(expr *expr) {
     ERR("Evaluating expr");
     return (value){0};
 }
+
+void expr_save_frame_resume(continuation c);
 
 void build_expr_plan(expr *expr) {
     if (!expr) {
@@ -854,6 +872,7 @@ void build_expr_plan(expr *expr) {
             expr_op op = {OP_PUSH_VAR, .as.variable = expr->as.variable};
             append(ops, op);
             break;
+            break;
         }
         case EXPR_BINARY: {
             build_expr_plan(expr->as.binary->left);
@@ -865,6 +884,17 @@ void build_expr_plan(expr *expr) {
         case EXPR_UNARY: {
             build_expr_plan(expr->as.unary->expr);
             expr_op op = {OP_UNARY_OP, .as.op = expr->as.binary->op};
+            append(ops, op);
+            break;
+        }
+        case EXPR_FUNCALL: {
+            expr_funcall *funcall = &expr->as.funcall;
+            for (int i = 0; i < funcall->args.count; i++) {
+                build_expr_plan(&funcall->args.items[i]);
+            }
+
+            expr_ops *ops = &global_interpreter->current_expr_plan;
+            expr_op op = {OP_CALL_FUNC, .as.func = {.name = funcall->name, .argc = funcall->args.count}};
             append(ops, op);
             break;
         }
@@ -953,6 +983,7 @@ void schedule_expr_function_call(const char *name, size_t argc, symbol *function
         s->scope = SCOPE_LOCAL;
         s->scope_depth = global_interpreter->scope_depth;
     }
+    global_interpreter->values_stack.count = stack_base;
 
     return_call r = {.return_stmt = NULL, .stack_idx = saved_stack, .is_expr_call = true};
     append(&global_interpreter->returns, r);
@@ -971,7 +1002,6 @@ bool is_true(value v) {
 }
 
 void discard_current_frame() {
-    pop(&global_interpreter->expr_frames);
     global_interpreter->current_expr_plan.items = NULL;
     global_interpreter->current_expr_plan.count = 0;
     global_interpreter->current_expr_plan.capacity = 0;
@@ -1045,8 +1075,10 @@ void eval_continuation() {
             global_interpreter->values_stack.count = frame.value_stack_idx;
             break;
         case CONT_DISCARD: {
-            discard_current_frame();
-            pop(&global_interpreter->values_stack);
+            frame = pop(&global_interpreter->expr_frames);
+            global_interpreter->current_expr_plan = frame.plan;
+            global_interpreter->current_expr_plan_idx = frame.plan_idx;
+            global_interpreter->values_stack.count = frame.value_stack_idx;
             global_interpreter->state = STATE_RUNNING;
             global_interpreter->pc = c.as.stmt_discard.next;
             break;
@@ -1096,8 +1128,7 @@ bool step_expr() {
                 global_interpreter->current_expr_plan_idx++;
                 break;
             } else if (s->type == SYMBOL_FUNCTION) {
-                schedule_expr_function_call(s->name, get_current_value_stack_delta(), s);
-                global_interpreter->current_expr_plan_idx++;
+                ERR("Should not be called");
                 return true;
             } else {
                 ERR("Unexpected symbol type %d in expression", s->type);
@@ -1174,14 +1205,16 @@ bool step_expr() {
         case OP_CALL_FUNC: {
             const char *name = expr->as.func.name;
             symbol *function = get_symbol(name);
-            if (function == NULL) {
+            if (function == NULL || (function->type != SYMBOL_FUNCTION_NATIVE && function->type != SYMBOL_FUNCTION)) {
                 ERR("Unknow function '%s'\n", name);
             }
 
             if (function->type == SYMBOL_FUNCTION_NATIVE) {
-                // TODO: Handle argc
+                //  TODO: Handle argc
                 function->as.native_func.function(NULL);
-                global_interpreter->state = STATE_RUNNING;
+                if (global_interpreter->state != STATE_SLEEPING) {
+                    global_interpreter->state = STATE_EXPR_EVALUATION;
+                }
                 // Will call return
                 if (global_interpreter->pc->type != STMT_FUNCTION_EXIT) {
                     global_interpreter->pc = global_interpreter->pc->next;
@@ -1276,7 +1309,6 @@ void do_function_exit() {
     if (!r.is_expr_call) {
         global_interpreter->pc = r.return_stmt;
         global_interpreter->state = STATE_RUNNING;
-        discard_current_frame();
     } else {
         if (global_interpreter->expr_frames.count == 0) {
             ERR("Missing expression frame for function return");
@@ -1395,7 +1427,7 @@ bool step_program(basic_interpreter *i) {
                     build_funcall_plan(&call);
                     global_interpreter->state = STATE_EXPR_EVALUATION;
                     expr_ops *ops = &global_interpreter->current_expr_plan;
-                    expr_op op = {OP_NOP};
+                    expr_op op = {.type = OP_NOP};
                     append(ops, op);
                     break;
                 }
@@ -1409,7 +1441,7 @@ bool step_program(basic_interpreter *i) {
                     build_funcall_plan(&call);
                     global_interpreter->state = STATE_EXPR_EVALUATION;
                     expr_ops *ops = &global_interpreter->current_expr_plan;
-                    expr_op op = {OP_NOP};
+                    expr_op op = {.type = OP_NOP};
                     append(ops, op);
                     break;
                 }
@@ -1472,7 +1504,7 @@ bool step_program(basic_interpreter *i) {
             expr_save_frame_new(c);
             build_expr_plan(&s->as.stmt_variable.expr);
             expr_ops *ops = &global_interpreter->current_expr_plan;
-            expr_op op = {OP_NOP};
+            expr_op op = {.type = OP_NOP};
             append(ops, op);
             global_interpreter->state = STATE_EXPR_EVALUATION;
             break;
@@ -1500,9 +1532,12 @@ bool step_program(basic_interpreter *i) {
             break;
         }
         case STMT_RETURN: {
-            BREAKPOINT();
-            expr_save_frame_new((continuation){CONT_DISCARD, .as.stmt_discard.next = s->next});
+            // expr_save_frame_new((continuation){CONT_DISCARD, .as.stmt_discard.next = s->next});
+            expr_save_frame_new((continuation){.type = CONT_NONE});
             build_expr_plan(&s->as.stmt_return.expr);
+            expr_ops *ops = &global_interpreter->current_expr_plan;
+            expr_op op = {.type = OP_NOP};
+            append(ops, op);
             global_interpreter->state = STATE_EXPR_EVALUATION;
             global_interpreter->pending_return = true;
             break;

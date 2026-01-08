@@ -1,5 +1,5 @@
-FUNC F();
+FUNC DOUBLE(x);
+    RETURN x * 2;
 END
 
-F;
-PRINT "OK";
+PRINT(DOUBLE(3));

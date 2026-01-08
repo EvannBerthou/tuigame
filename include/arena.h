@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 
+//TODO: Could use arena
 #define append(l, x)                                                               \
     do {                                                                           \
         if ((l)->count == (l)->capacity) {                                         \

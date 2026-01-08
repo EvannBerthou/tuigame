@@ -1,7 +1,7 @@
 No
 ---
 IF FALSE;
-    PRINT "Yes";
+    PRINT("Yes");
 ELSE
-    PRINT "No";
+    PRINT("No");
 END

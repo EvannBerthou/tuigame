@@ -6,4 +6,4 @@ FUNC F();
     END
     RETURN "False";
 END
-PRINT F;
+PRINT(F());

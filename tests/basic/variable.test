@@ -2,4 +2,4 @@
 ---
 A = 3;
 B = A * 2 + 1;
-PRINT B;
+PRINT(B);

@@ -2,8 +2,8 @@ CALLED
 OK
 ---
 FUNC F();
-    PRINT "CALLED";
+    PRINT("CALLED");
 END
 
-F;
-PRINT "OK";
+F();
+PRINT("OK");

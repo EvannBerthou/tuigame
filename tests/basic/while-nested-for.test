@@ -8,7 +8,7 @@
 I = 0;
 WHILE I < 3;
     FOR J IN 0..2;
-        PRINT I " " J;
+        PRINT(I " " J);
     END
     I = I + 1;
 END

@@ -5,9 +5,9 @@
 ---
 FUNC COUNTDOWN(n);
     IF n >= 0;
-        PRINT n;
-        COUNTDOWN n - 1;
+        PRINT(n);
+        COUNTDOWN(n - 1);
     END
 END
 
-COUNTDOWN 3;
+COUNTDOWN(3);

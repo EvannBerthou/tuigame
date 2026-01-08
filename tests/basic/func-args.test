@@ -1,7 +1,7 @@
 5
 ---
 FUNC INC(x);
-    PRINT x + 1;
+    PRINT(x + 1);
 END
 
-INC 4;
+INC(4);
