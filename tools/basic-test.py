@@ -19,6 +19,9 @@ while args:
 
 root = 'tests/basic/'
 
+success = 0
+failed = 0
+
 tests = sorted(os.listdir(root))
 if specific_test_case :
     if specific_test_case in tests:
@@ -55,6 +58,7 @@ for test in tests:
 
     expected = '\n'.join(expected_ouput)
     if test_result != expected:
+        failed += 1
         print(f"\033[91mTest case {test} : Test failed\033[0m")
         print("Expected:")
         print(expected)
@@ -66,3 +70,6 @@ for test in tests:
             break
     elif not failed_only or specific_test_case:
         print(f"\033[94mTest case {test} : Test success\033[0m")
+        success += 1
+print(f"\033[94mSuccess={success}\033[0m")
+print(f"\033[91mFailed={failed}\033[0m")

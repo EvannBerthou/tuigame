@@ -1,0 +1,7 @@
+4
+---
+FUNC DOUBLE(x);
+    RETURN x * 2;
+END
+
+PRINT DOUBLE(2);
