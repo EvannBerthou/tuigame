@@ -1,5 +1,6 @@
-FUNC F();
+FOR i IN 0..2;
+    FOR j IN 0..2;
+        PRINT(i " " j);
+    END
 END
 
-F();
-PRINT(F());

@@ -95,7 +95,8 @@ typedef struct {
 
 typedef enum {
     STATE_RUNNING,
-    STATE_EXPR_EVALUATION,  // TODO
+    STATE_EXPR_EVALUATION,
+    STATE_CONTINUE_EXPR_EVALUATION,  // TODO: WTF
     STATE_FINISHED,
     STATE_SLEEPING,
 } interpreter_state;
@@ -241,8 +242,14 @@ typedef struct {
     const char *variable;
     expr min;
     expr max;
-    size_t stack_saved;
 } stmt_for;
+
+typedef struct {
+    const char *variable;
+    int min;
+    int max;
+    size_t stack_saved;
+} stmt_for_end;
 
 typedef struct {
     expr condition;
@@ -274,6 +281,7 @@ struct stmt {
         stmt_funcall stmt_funcall;
         stmt_if stmt_if;
         stmt_for stmt_for;
+        stmt_for_end stmt_for_end;
         stmt_while stmt_while;
         stmt_variable stmt_variable;
         stmt_funcdecl stmt_funcdecl;
@@ -289,6 +297,8 @@ typedef enum {
     CONT_ASSIGN,
     CONT_IF,
     CONT_DISCARD,
+    CONT_LOOP_MIN,
+    CONT_LOOP_MAX,
 } continuation_type;
 
 typedef struct {
@@ -305,6 +315,10 @@ typedef struct {
         struct {
             stmt *next;
         } stmt_discard;
+        struct {
+            stmt_for *entry;
+            stmt *end;
+        } stmt_for;
     } as;
 } continuation;
 

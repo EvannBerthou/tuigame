@@ -589,16 +589,17 @@ stmt *parse_for() {
     stmt *end = arena_alloc(interpreter_arena, sizeof(*end));
     end->type = STMT_FOREND;
     end->next = NULL;
-    end->jmp = result;
-    end->as.stmt_for = result->as.stmt_for;
+    end->jmp = NULL;
+    end->as.stmt_for_end = (stmt_for_end){.min = 0, .max = 0, .variable = for_stmt->variable};
 
     if (body) {
         stmt_tail(body)->next = end;
-        result->jmp = body;
+        result->next = body;
     } else {
-        result->jmp = end;
+        result->next = end;
     }
-    result->next = end;
+    result->jmp = end;
+    end->jmp = result->next;
 
     expect_kw(KW_END);
     return result;
@@ -1067,7 +1068,7 @@ void eval_continuation() {
             global_interpreter->values_stack.count = frame.value_stack_idx;
             break;
         }
-        case CONT_IF:
+        case CONT_IF: {
             value v = pop(&global_interpreter->values_stack);
             if (is_true(v)) {
                 global_interpreter->pc = c.as.stmt_if.if_branch;
@@ -1080,6 +1081,7 @@ void eval_continuation() {
             global_interpreter->current_expr_plan_idx = frame.plan_idx;
             global_interpreter->values_stack.count = frame.value_stack_idx;
             break;
+        }
         case CONT_DISCARD: {
             frame = pop(&global_interpreter->expr_frames);
             global_interpreter->current_expr_plan = frame.plan;
@@ -1087,6 +1089,27 @@ void eval_continuation() {
             global_interpreter->values_stack.count = frame.value_stack_idx;
             global_interpreter->state = STATE_RUNNING;
             global_interpreter->pc = c.as.stmt_discard.next;
+            break;
+        }
+        case CONT_LOOP_MIN: {
+            value v = pop(&global_interpreter->values_stack);
+            c.as.stmt_for.end->as.stmt_for_end.min = value_is_num(v).as.number;
+            frame = pop(&global_interpreter->expr_frames);
+            global_interpreter->current_expr_plan = frame.plan;
+            global_interpreter->current_expr_plan_idx = frame.plan_idx;
+            global_interpreter->values_stack.count = frame.value_stack_idx;
+            global_interpreter->state = STATE_RUNNING;
+            global_interpreter->pc = c.as.stmt_for.end;
+            break;
+        }
+        case CONT_LOOP_MAX: {
+            value v = pop(&global_interpreter->values_stack);
+            c.as.stmt_for.end->as.stmt_for_end.max = value_is_num(v).as.number;
+            frame = pop(&global_interpreter->expr_frames);
+            global_interpreter->current_expr_plan = frame.plan;
+            global_interpreter->current_expr_plan_idx = frame.plan_idx;
+            global_interpreter->values_stack.count = frame.value_stack_idx;
+            global_interpreter->state = STATE_CONTINUE_EXPR_EVALUATION;
             break;
         }
         default:
@@ -1360,9 +1383,15 @@ bool state_expr_evaluation() {
         return true;
     }
 
+    // TODO: Replace with a EVAL_CONTINUATION_RESULT
     eval_continuation();
 
     if (global_interpreter->state == STATE_RUNNING) {
+        return true;
+    }
+
+    if (global_interpreter->state == STATE_CONTINUE_EXPR_EVALUATION) {
+        global_interpreter->state = STATE_EXPR_EVALUATION;
         return true;
     }
 
@@ -1481,36 +1510,41 @@ bool step_program(basic_interpreter *i) {
             break;
         }
         case STMT_FOR: {
-            symbol *var = get_symbol(s->as.stmt_for.variable);
-            if (var == NULL) {
-                s->as.stmt_for.stack_saved = global_interpreter->symbol_count;
-                var = get_symbol_id(create_symbol(s->as.stmt_for.variable, SYMBOL_VARIABLE_INT));
-                value min = eval_expr(&s->as.stmt_for.min);
-                if (min.type != VAL_NUM) {
-                    ERR("Can't loop over non numerical values");
-                }
-                var->as.integer = min.as.number;
-                var->scope = SCOPE_LOCAL;
-                var->scope_depth = global_interpreter->scope_depth;
-            }
-            value max = eval_expr(&s->as.stmt_for.max);
-            if (max.type != VAL_NUM) {
-                ERR("Can't loop over non numerical values");
-            }
-            if (var->as.integer == max.as.number) {
-                i->pc = s->next;
-                global_interpreter->symbol_count = s->as.stmt_for.stack_saved;
-            } else {
-                i->pc = s->jmp;
-            }
+            continuation min = {.type = CONT_LOOP_MIN, .as.stmt_for = {.entry = &s->as.stmt_for, .end = s->jmp}};
+            expr_save_frame_new(min);
+            build_expr_plan(&s->as.stmt_for.min);
+
+            continuation max = {.type = CONT_LOOP_MAX, .as.stmt_for = {.entry = &s->as.stmt_for, .end = s->jmp}};
+            expr_save_frame_new(max);
+            build_expr_plan(&s->as.stmt_for.max);
+
+            global_interpreter->state = STATE_EXPR_EVALUATION;
             break;
         }
         case STMT_FOREND: {
-            symbol *var = get_symbol(s->as.stmt_for.variable);
-            if (var == NULL) {
+            const char *variable = s->as.stmt_for_end.variable;
+            int min = s->as.stmt_for_end.min;
+            int max = s->as.stmt_for_end.max;
+
+            BREAKPOINT();
+            if (max == min) {
                 i->pc = s->next;
+            }
+
+            symbol *var = get_symbol(variable);
+
+            if (var == NULL) {
+                s->as.stmt_for_end.stack_saved = global_interpreter->symbol_count;
+                var = get_symbol_id(create_symbol(variable, SYMBOL_VARIABLE_INT));
+                var->as.integer = min;
             } else {
                 var->as.integer++;
+            }
+
+            if (var->as.integer == max) {
+                i->pc = s->next;
+                global_interpreter->symbol_count = s->as.stmt_for_end.stack_saved;
+            } else {
                 i->pc = s->jmp;
             }
             break;
