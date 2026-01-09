@@ -813,10 +813,9 @@ void print_fn(stmt_funcall *call) {
     expr_frame *top_frame = &global_interpreter->expr_frames.items[global_interpreter->expr_frames.count - 1];
     size_t start = top_frame->value_stack_idx;
     size_t end = global_interpreter->values_stack.count;
-    BREAKPOINT();
 
     for (size_t i = start; i < end; i++) {
-        value v = pop(&global_interpreter->values_stack);
+        value v = global_interpreter->values_stack.items[start + i];
         print_val(&v);
     }
     interpreter_log("\n");
@@ -894,7 +893,7 @@ void build_expr_plan(expr *expr) {
             }
 
             expr_ops *ops = &global_interpreter->current_expr_plan;
-            expr_op op = {OP_CALL_FUNC, .as.func = {.name = funcall->name, .argc = funcall->args.count}};
+            expr_op op = {OP_CALL_FUNC, .as.func = {.name = funcall->name, .argc = funcall->args.count, .stmt = false}};
             append(ops, op);
             break;
         }
@@ -903,13 +902,13 @@ void build_expr_plan(expr *expr) {
     }
 }
 
-void build_funcall_plan(stmt_funcall *funcall) {
+void build_stmt_funcall_plan(stmt_funcall *funcall) {
     for (int i = 0; i < funcall->count; i++) {
         build_expr_plan(&funcall->items[i]);
     }
 
     expr_ops *ops = &global_interpreter->current_expr_plan;
-    expr_op op = {OP_CALL_FUNC, .as.func = {.name = funcall->function, .argc = funcall->count}};
+    expr_op op = {OP_CALL_FUNC, .as.func = {.name = funcall->function, .argc = funcall->count, .stmt = true}};
     append(ops, op);
 }
 
@@ -955,14 +954,13 @@ void expr_save_frame_resume(continuation c) {
     global_interpreter->current_expr_plan.items = NULL;
 }
 
-void schedule_expr_function_call(const char *name, size_t argc, symbol *function) {
+void schedule_function_call(const char *name, size_t argc, symbol *function) {
     size_t expected_arg_count = function->as.funcdecl.arg_count;
     if (expected_arg_count != argc) {
         ERR("Function %s expected %d arguments but recieved %d", name, expected_arg_count, argc);
     }
 
     global_interpreter->scope_depth++;
-    size_t saved_stack = global_interpreter->symbol_count;
     size_t stack_base = global_interpreter->values_stack.count - argc;
     for (size_t i = 0; i < argc; i++) {
         value v = global_interpreter->values_stack.items[stack_base + i];
@@ -985,10 +983,15 @@ void schedule_expr_function_call(const char *name, size_t argc, symbol *function
     }
     global_interpreter->values_stack.count = stack_base;
 
-    return_call r = {.return_stmt = NULL, .stack_idx = saved_stack, .is_expr_call = true};
-    append(&global_interpreter->returns, r);
     global_interpreter->pc = function->as.funcdecl.body;
     global_interpreter->state = STATE_RUNNING;
+}
+
+void schedule_expr_function_call(const char *name, size_t argc, symbol *function) {
+    size_t saved_stack = global_interpreter->symbol_count;
+    schedule_function_call(name, argc, function);
+    return_call r = {.return_stmt = NULL, .stack_idx = saved_stack, .is_expr_call = true};
+    append(&global_interpreter->returns, r);
 }
 
 bool is_true(value v) {
@@ -1058,7 +1061,10 @@ void eval_continuation() {
             }
             global_interpreter->state = STATE_RUNNING;
             global_interpreter->pc = c.as.stmt_assign.next;
-            discard_current_frame();
+            frame = pop(&global_interpreter->expr_frames);
+            global_interpreter->current_expr_plan = frame.plan;
+            global_interpreter->current_expr_plan_idx = frame.plan_idx;
+            global_interpreter->values_stack.count = frame.value_stack_idx;
             break;
         }
         case CONT_IF:
@@ -1211,6 +1217,7 @@ bool step_expr() {
 
             if (function->type == SYMBOL_FUNCTION_NATIVE) {
                 //  TODO: Handle argc
+                global_interpreter->scope_depth++;
                 function->as.native_func.function(NULL);
                 if (global_interpreter->state != STATE_SLEEPING) {
                     global_interpreter->state = STATE_EXPR_EVALUATION;
@@ -1220,11 +1227,15 @@ bool step_expr() {
                     global_interpreter->pc = global_interpreter->pc->next;
                 }
                 global_interpreter->current_expr_plan_idx++;
-                global_interpreter->scope_depth++;
                 break;
             }
 
-            schedule_expr_function_call(function->name, get_current_value_stack_delta(), function);
+            if (expr->as.func.stmt) {
+                schedule_function_call(function->name, get_current_value_stack_delta(), function);
+            } else {
+                schedule_expr_function_call(function->name, get_current_value_stack_delta(), function);
+            }
+
             global_interpreter->current_expr_plan_idx++;
             return true;
         }
@@ -1264,10 +1275,16 @@ void register_variable_string(const char *name, const char *value) {
     s->as.string = value;
 }
 
+void breakpoint_fn(stmt_funcall *call) {
+    (void)call;
+    BREAKPOINT();
+}
+
 void register_std_lib() {
     register_function("PRINT", print_fn, -1);
     register_function("EXIT", exit_fn, 1);
     register_function("SLEEP", sleep_fn, 1);
+    register_function("BP", breakpoint_fn, 0);
 }
 
 void init_interpreter(basic_interpreter *i, const char *src) {
@@ -1299,12 +1316,12 @@ void do_function_exit() {
 
     return_call r = pop(&global_interpreter->returns);
     global_interpreter->symbol_count = r.stack_idx;
-    global_interpreter->scope_depth--;
 
     value ret = {.type = VAL_NUM, .as.number = 0};
     if (global_interpreter->values_stack.count > 0) {
         ret = pop(&global_interpreter->values_stack);
     }
+    global_interpreter->scope_depth--;
 
     if (!r.is_expr_call) {
         global_interpreter->pc = r.return_stmt;
@@ -1412,6 +1429,9 @@ bool step_program(basic_interpreter *i) {
             }
             switch (function->type) {
                 case SYMBOL_FUNCTION_NATIVE: {
+                    // The double next is beccause we insert an implicit STMT_FUNCTION_EXIT after every native function
+                    // call. So when function terminates, it will go to the next PC which is alwways a
+                    // STMT_FUNCTION_EXIT. So we use 2 next to jump over it on return and avoid loops.
                     return_call r = {.return_stmt = s->next->next,
                                      .stack_idx = global_interpreter->symbol_count,
                                      .is_expr_call = false};
@@ -1424,7 +1444,7 @@ bool step_program(basic_interpreter *i) {
                             function->as.funcdecl.arg_count, s->as.stmt_funcall.count);
                     }
                     expr_save_frame_new((continuation){CONT_DISCARD, .as.stmt_discard.next = s->next});
-                    build_funcall_plan(&call);
+                    build_stmt_funcall_plan(&call);
                     global_interpreter->state = STATE_EXPR_EVALUATION;
                     expr_ops *ops = &global_interpreter->current_expr_plan;
                     expr_op op = {.type = OP_NOP};
@@ -1438,7 +1458,7 @@ bool step_program(basic_interpreter *i) {
                                      .is_expr_call = false};
                     append(&global_interpreter->returns, r);
                     expr_save_frame_new((continuation){CONT_DISCARD, .as.stmt_discard.next = s->next});
-                    build_funcall_plan(&call);
+                    build_stmt_funcall_plan(&call);
                     global_interpreter->state = STATE_EXPR_EVALUATION;
                     expr_ops *ops = &global_interpreter->current_expr_plan;
                     expr_op op = {.type = OP_NOP};
@@ -1532,7 +1552,6 @@ bool step_program(basic_interpreter *i) {
             break;
         }
         case STMT_RETURN: {
-            // expr_save_frame_new((continuation){CONT_DISCARD, .as.stmt_discard.next = s->next});
             expr_save_frame_new((continuation){.type = CONT_NONE});
             build_expr_plan(&s->as.stmt_return.expr);
             expr_ops *ops = &global_interpreter->current_expr_plan;

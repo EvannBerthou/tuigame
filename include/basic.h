@@ -195,6 +195,7 @@ typedef struct {
         struct {
             const char *name;
             int argc;
+            bool stmt;
         } func;
     } as;
 } expr_op;

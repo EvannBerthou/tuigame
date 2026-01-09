@@ -1,0 +1,17 @@
+5
+10
+5
+---
+FUNC B();
+    X = 10;
+    PRINT(X);
+END
+
+FUNC A();
+    X = 5;
+    PRINT(X);
+    B();
+    PRINT(X);
+END
+
+A();
