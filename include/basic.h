@@ -79,7 +79,7 @@ typedef struct {
     size_t scope_depth;
     union {
         struct {
-            void (*function)(stmt_funcall *);
+            void (*function)();
             bool variadic_arg_count;
             size_t arg_count;
         } native_func;
@@ -367,13 +367,17 @@ typedef struct {
 value eval_expr(expr *e);
 void init_interpreter(basic_interpreter *i, const char *src);
 bool step_program(basic_interpreter *i);
-void register_function(const char *name, void (*f)(stmt_funcall *), int arg_count);
+void register_function(const char *name, void (*f)(), int arg_count);
 void register_variable_int(const char *name, int value);
 void register_variable_string(const char *name, const char *value);
 void advance_interpreter_time(basic_interpreter *i, float time);
 void destroy_interpreter();
 
-void basic_push_function_result(int result);
+void basic_push_int(int result);
+void basic_push_string(const char *s);
 int basic_pop_value_num();
+const char *basic_pop_value_string();
+int value_as_string(value v, char *out);
+void basic_sleep(float seconds);
 
 #endif

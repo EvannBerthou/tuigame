@@ -47,6 +47,7 @@ typedef struct {
 } test_process;
 
 typedef struct {
+    const char *filename;
     basic_interpreter interpreter;
     int fb[2][FB_SIZE];
     int fb_idx;
@@ -281,6 +282,7 @@ struct terminal {
     process_update process_update;
     process_render process_render;
     void *args;
+    bool render_not_ready;
 
     filesystem fs;
 };
@@ -320,7 +322,7 @@ typedef struct {
     XIUR(mail, NULL)   \
     XI(shutdown, NULL) \
     XI(clear, NULL)    \
-    XIU(ping, NULL)    \
+    XI(ping, NULL)     \
     XIUR(edit, NULL)   \
     XIUR(help, NULL)   \
     XIUR(test, NULL)   \
@@ -580,27 +582,6 @@ void terminal_render_prompt(terminal *term) {
         DrawRectangle(60 + MeasureTextEx(terminal_font, prompt_text, font_size, 1).x + 8,
                       40 + font_size * (last_line_index + 1) + 4, 10, font_size - 8, WHITE);
     }
-}
-
-int ping_update(terminal *term, void *args) {
-    ping_process *p = (ping_process *)args;
-    term->title = TextFormat("Ping : %s", p->ip);
-    p->remaining_time -= GetFrameTime();
-    if (p->remaining_time <= 0) {
-        const terminal *other = network_get_terminal(&networks[0], p->ip);
-        if (other) {
-            terminal_append_log(term, TextFormat("Machine %s online", p->ip));
-        } else {
-            terminal_append_log(term, TextFormat("Machine %s offline", p->ip));
-        }
-        p->remaning_count--;
-        p->remaining_time = 1.f;
-        if (p->remaning_count == 0) {
-            free((void *)p->ip);
-            return 1;
-        }
-    }
-    return 0;
 }
 
 typedef struct edit_line edit_line;
@@ -1099,20 +1080,28 @@ void test_render(terminal *term, void *args) {
 
 static void put_pixel(int *fb, int x, int y, int color);
 
-void put_pixel_fn(stmt_funcall *call) {
-    (void)call;
+void put_pixel_fn() {
     exec_process *p = (exec_process *)active_term->args;
     int c = basic_pop_value_num();
     int y = basic_pop_value_num();
     int x = basic_pop_value_num();
     put_pixel(p->fb[1 - p->fb_idx], x, y, c % TERM_COUNT);
-    basic_push_function_result(0);
+    basic_push_int(0);
 }
 
-void flip_render_fn(stmt_funcall *call) {
-    (void)call;
+void flip_render_fn() {
     exec_process *p = (exec_process *)active_term->args;
     p->fb_idx = 1 - p->fb_idx;
+    active_term->render_not_ready = false;
+}
+
+bool terminal_handle_command(const char *cmd);
+
+void system_fn() {
+    const char *cmd = basic_pop_value_string();
+    int result = terminal_handle_command(cmd) == false ? 1 : 0;
+    basic_push_int(result);
+    basic_sleep(0.25f);
 }
 
 int exec_init(terminal *t, int argc, const char **argv) {
@@ -1128,14 +1117,16 @@ int exec_init(terminal *t, int argc, const char **argv) {
     }
     exec_process *p = malloc(sizeof(*p));
     assert(p != NULL);
+    p->filename = strdup(filepath);
     p->interpreter = (basic_interpreter){.print_fn = terminal_basic_print, .append_print_fn = terminal_append_print};
     memset(p->fb[0], 0, sizeof(*p->fb[0]) * FB_SIZE);
     memset(p->fb[1], 0, sizeof(*p->fb[1]) * FB_SIZE);
-    terminal_append_log(t, "");
     init_interpreter(&p->interpreter, file->content);
     register_function("PUTPIXEL", put_pixel_fn, 3);
     register_function("RENDER", flip_render_fn, 0);
     register_function("COLOR_RED", flip_render_fn, 0);
+    register_function("SYSTEM", system_fn, 1);
+
     register_variable_int("COLOR_BG", TERM_BG);
     register_variable_int("COLOR_FG", TERM_FG);
     register_variable_int("COLOR_BLUE", TERM_BLUE);
@@ -1143,24 +1134,27 @@ int exec_init(terminal *t, int argc, const char **argv) {
     register_variable_int("COLOR_RED", TERM_RED);
     register_variable_int("COLOR_YELLOW", TERM_YELLOW);
     register_variable_int("COLOR_PURPLE", TERM_PURPLE);
+
+    t->render_not_ready = true;
     t->args = p;
     return 0;
 }
 
 int exec_update(terminal *t, void *args) {
     exec_process *p = (exec_process *)args;
-    t->title = NULL;
     if (IsKeyPressed(KEY_C) && IsKeyDown(KEY_LEFT_CONTROL)) {
         destroy_interpreter();
+        free((void *)p->filename);
         return 1;
     }
     advance_interpreter_time(&p->interpreter, GetFrameTime());
     for (int i = 0; i < 100000; i++) {
         if (!step_program(&p->interpreter)) {
-            t->log_count--;
+            free((void *)p->filename);
             return 1;
         }
     }
+    t->title = TextFormat("Executing %s", p->filename);
     return 0;
 }
 
@@ -1486,13 +1480,16 @@ int ping_init(terminal *term, int argc, const char **argv) {
         terminal_append_log(term, "Invalid IP format");
         return 1;
     }
-    term->process_update = &ping_update;
-    ping_process *p = malloc(sizeof(ping_process));
-    assert(p != NULL);
-    p->remaning_count = 4;
-    p->remaining_time = 1;
-    p->ip = strdup(ip);
-    term->args = p;
+
+    term->title = "Ping";
+
+    const terminal *other = network_get_terminal(&networks[0], ip);
+    if (other) {
+        terminal_append_log(term, TextFormat("Machine %s online", ip));
+    } else {
+        terminal_append_log(term, TextFormat("Machine %s offline", ip));
+    }
+
     return 0;
 }
 
@@ -1560,15 +1557,11 @@ void help_render(terminal *term, void *args) {
                1, WHITE);
 }
 
-// TODO: Remove empty space argv
-void terminal_handle_command(terminal *term) {
-    term->history_ptr = 0;
+bool terminal_handle_command(const char *cmd) {
     int argc = 0;
-    const char *input = TextFormat("%.*s", term->input_cursor, term->input);
-    const char **argv = TextSplit(input, ' ', &argc);
-    terminal_append_input(term);
+    const char **argv = TextSplit(cmd, ' ', &argc);
     if (argc == 0 || *argv[0] == '\0') {
-        return;
+        return false;
     }
 
     command *c = NULL;
@@ -1583,18 +1576,26 @@ void terminal_handle_command(terminal *term) {
     }
 
     if (c != NULL) {
-        if (c->init(term, argc, argv) != 0) {
-            return;
+        if (c->init(active_term, argc, argv) != 0) {
+            return false;
         }
         if (c->update != NULL) {
-            term->process_update = c->update;
+            active_term->process_update = c->update;
         }
         if (c->render != NULL) {
-            term->process_render = c->render;
+            active_term->process_render = c->render;
         }
-    } else {
-        terminal_append_log(term, TextFormat("Unknown command : %s", argv[0]));
+        return true;
     }
+    terminal_append_log(active_term, TextFormat("Unknown command : %s", argv[0]));
+    return false;
+}
+
+void terminal_exec_input(terminal *term) {
+    term->history_ptr = 0;
+    const char *input = TextFormat("%.*s", term->input_cursor, term->input);
+    terminal_append_input(term);
+    terminal_handle_command(input);
 }
 
 const char *terminal_autocomplete_command(const char *input) {
@@ -1950,7 +1951,7 @@ int main() {
                 active_term->input_cursor--;
             }
             if (IsKeyPressed(KEY_ENTER)) {
-                terminal_handle_command(active_term);
+                terminal_exec_input(active_term);
             }
             if (IsKeyPressed(KEY_UP)) {
                 int offset = active_term->history_count - active_term->history_ptr - 1;
@@ -2001,10 +2002,10 @@ int main() {
                 DrawTextEx(terminal_font, active_term->title, (Vector2){middle, 30}, 28, 1, BLACK);
             }
 
-            if (active_term->process_render == NULL) {
-                terminal_render(active_term);
-            } else {
+            if (active_term->process_render != NULL && !active_term->render_not_ready) {
                 active_term->process_render(active_term, active_term->args);
+            } else {
+                terminal_render(active_term);
             }
             if (active_term->process_update == NULL) {
                 terminal_render_prompt(active_term);

@@ -1,0 +1,14 @@
+Hello, World
+Hello Again, World
+I=0
+X = 4
+4X =
+---
+PRINTN("Hello, " + "World");
+PRINTN("Hello " + "Again, " + "World");
+PRINTN("I=" + 0);
+
+X = 2 * 2;
+Y = "X = ";
+PRINTN(Y + X);
+PRINTN(X + Y);

@@ -1,0 +1,10 @@
+0
+1
+1
+5
+---
+
+PRINTN(LENGTH(""));
+PRINTN(LENGTH("a"));
+PRINTN(LENGTH(" "));
+PRINTN(LENGTH("Hello"));
