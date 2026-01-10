@@ -14,6 +14,7 @@
  */
 #include "basic.h"
 #include <ctype.h>
+#include <math.h>
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -337,18 +338,12 @@ stmt *parse_funcall(token *function) {
 
     symbol *s = get_symbol(funcall->function);
     if (s != NULL && s->type == SYMBOL_FUNCTION_NATIVE) {
-        stmt *function_exit_stmt = arena_alloc(interpreter_arena, sizeof(*function_exit_stmt));
-        function_exit_stmt->type = STMT_FUNCTION_EXIT;
-        function_exit_stmt->next = NULL;
-        function_exit_stmt->jmp = NULL;
-
         stmt *end = arena_alloc(interpreter_arena, sizeof(*end));
         end->type = STMT_NOP;
         end->next = NULL;
         end->jmp = NULL;
 
-        function_exit_stmt->next = end;
-        result->next = function_exit_stmt;
+        result->next = end;
     }
 
     expect(TOKEN_SEMICOLON);
@@ -548,14 +543,24 @@ stmt *parse_if() {
     end->next = NULL;
     end->jmp = NULL;
 
-    result->next = parse_block();
-    stmt_tail(result->next)->next = end;
+    stmt *body = parse_block();
+    if (body != NULL) {
+        result->next = body;
+        stmt_tail(result->next)->next = end;
+    } else {
+        result->next = end;
+    }
 
     token *peek = parser_peek();
     if (peek->keyword == KW_ELSE) {
         parser_reader++;
-        result->jmp = parse_block();
-        stmt_tail(result->jmp)->next = end;
+        stmt *else_body = parse_block();
+        if (else_body != NULL) {
+            result->jmp = else_body;
+            stmt_tail(else_body)->next = end;
+        } else {
+            result->jmp = end;
+        }
     } else {
         result->jmp = end;
     }
@@ -621,15 +626,14 @@ stmt *parse_while() {
     end->type = STMT_WHILEEND;
     end->next = NULL;
     end->jmp = result;
-    end->as.stmt_while = result->as.stmt_while;
 
     if (body) {
         stmt_tail(body)->next = end;
-        result->jmp = body;
+        result->next = body;
     } else {
-        result->jmp = end;
+        result->next = end;
     }
-    result->next = end;
+    result->jmp = end;
 
     expect_kw(KW_END);
     return result;
@@ -796,6 +800,13 @@ size_t create_symbol(const char *name, symbol_type type) {
     return global_interpreter->symbol_count++;
 }
 
+value value_is_num(value v) {
+    if (v.type != VAL_NUM) {
+        ERR("Trying to do arithmetics on non number elements");
+    }
+    return v;
+}
+
 value eval_expr(expr *e);
 
 void print_val(value *v) {
@@ -808,9 +819,8 @@ void print_val(value *v) {
     }
 }
 
-void print_fn(stmt_funcall *call) {
-    (void)call;
-
+void internal_print_fn() {
+    BREAKPOINT();
     expr_frame *top_frame = &global_interpreter->expr_frames.items[global_interpreter->expr_frames.count - 1];
     size_t start = top_frame->value_stack_idx;
     size_t end = global_interpreter->values_stack.count;
@@ -819,9 +829,19 @@ void print_fn(stmt_funcall *call) {
         value v = global_interpreter->values_stack.items[start + i];
         print_val(&v);
     }
-    interpreter_log("\n");
     value result = {.type = VAL_NUM, .as.number = 0};
     append(&global_interpreter->values_stack, result);
+}
+
+void printn_fn(stmt_funcall *call) {
+    (void)call;
+    internal_print_fn();
+    interpreter_log("\n");
+}
+
+void print_fn(stmt_funcall *call) {
+    (void)call;
+    internal_print_fn();
 }
 
 void exit_fn(stmt_funcall *call) {
@@ -836,13 +856,14 @@ void sleep_fn(stmt_funcall *call) {
     global_interpreter->state = STATE_SLEEPING;
 }
 
-value value_is_num(value v) {
-    if (v.type != VAL_NUM) {
-        ERR("Trying to do arithmetics on non number elements");
-    }
-    return v;
+void mod_fn(stmt_funcall *call) {
+    (void)call;
+    value mod = value_is_num(pop(&global_interpreter->values_stack));
+    value v = value_is_num(pop(&global_interpreter->values_stack));
+    value result = {.type = VAL_NUM, .as.number = fmod((int)v.as.number, (int)mod.as.number)};
+    append(&global_interpreter->values_stack, result);
+    BREAKPOINT();
 }
-
 value eval_expr(expr *expr) {
     (void)expr;
     ERR("Evaluating expr");
@@ -875,10 +896,17 @@ void build_expr_plan(expr *expr) {
             break;
         }
         case EXPR_BINARY: {
-            build_expr_plan(expr->as.binary->left);
-            build_expr_plan(expr->as.binary->right);
-            expr_op op = {OP_BINARY_OP, .as.op = expr->as.binary->op};
-            append(ops, op);
+            if (expr->as.binary->op == TOKEN_OR || expr->as.binary->op == TOKEN_AND) {
+                build_expr_plan(expr->as.binary->left);
+                expr_op op = {OP_BINARY_OP, .as.op = expr->as.binary->op};
+                append(ops, op);
+                build_expr_plan(expr->as.binary->right);
+            } else {
+                build_expr_plan(expr->as.binary->left);
+                build_expr_plan(expr->as.binary->right);
+                expr_op op = {OP_BINARY_OP, .as.op = expr->as.binary->op};
+                append(ops, op);
+            }
             break;
         }
         case EXPR_UNARY: {
@@ -915,6 +943,17 @@ void build_stmt_funcall_plan(stmt_funcall *funcall) {
 
 expr_op nop = {.type = OP_NOP};
 
+void restore_previous_frame() {
+    if (global_interpreter->expr_frames.count == 0) {
+        ERR("No more frame to restore");
+    }
+    expr_frame frame = pop(&global_interpreter->expr_frames);
+    global_interpreter->current_expr_plan = frame.plan;
+    global_interpreter->current_expr_plan_idx = frame.plan_idx;
+    global_interpreter->values_stack.count = frame.value_stack_idx;
+    global_interpreter->pending_return = frame.pending_return;
+}
+
 void expr_save_frame_new(continuation c) {
     if (global_interpreter->current_expr_plan.count == 0) {
         global_interpreter->current_expr_plan.items = &nop;
@@ -926,13 +965,15 @@ void expr_save_frame_new(continuation c) {
                         .plan_idx = global_interpreter->current_expr_plan_idx,
                         .value_stack_idx = global_interpreter->values_stack.count,
                         .continuation = c,
-                        .own_returns = false};
+                        .own_returns = false,
+                        .pending_return = global_interpreter->pending_return};
     append(&global_interpreter->expr_frames, frame);
 
     global_interpreter->current_expr_plan_idx = 0;
     global_interpreter->current_expr_plan.count = 0;
     global_interpreter->current_expr_plan.capacity = 0;
     global_interpreter->current_expr_plan.items = NULL;
+    global_interpreter->pending_return = false;
 }
 
 void expr_save_frame_resume(continuation c) {
@@ -946,13 +987,15 @@ void expr_save_frame_resume(continuation c) {
                         .plan_idx = global_interpreter->current_expr_plan_idx + 1,
                         .value_stack_idx = global_interpreter->values_stack.count,
                         .continuation = c,
-                        .own_returns = true};
+                        .own_returns = true,
+                        .pending_return = global_interpreter->pending_return};
     append(&global_interpreter->expr_frames, frame);
 
     global_interpreter->current_expr_plan_idx = 0;
     global_interpreter->current_expr_plan.count = 0;
     global_interpreter->current_expr_plan.capacity = 0;
     global_interpreter->current_expr_plan.items = NULL;
+    global_interpreter->pending_return = false;
 }
 
 void schedule_function_call(const char *name, size_t argc, symbol *function) {
@@ -1062,10 +1105,7 @@ void eval_continuation() {
             }
             global_interpreter->state = STATE_RUNNING;
             global_interpreter->pc = c.as.stmt_assign.next;
-            frame = pop(&global_interpreter->expr_frames);
-            global_interpreter->current_expr_plan = frame.plan;
-            global_interpreter->current_expr_plan_idx = frame.plan_idx;
-            global_interpreter->values_stack.count = frame.value_stack_idx;
+            restore_previous_frame();
             break;
         }
         case CONT_IF: {
@@ -1075,47 +1115,48 @@ void eval_continuation() {
             } else {
                 global_interpreter->pc = c.as.stmt_if.else_branch;
             }
+            restore_previous_frame();
             global_interpreter->state = STATE_RUNNING;
-            frame = pop(&global_interpreter->expr_frames);
-            global_interpreter->current_expr_plan = frame.plan;
-            global_interpreter->current_expr_plan_idx = frame.plan_idx;
-            global_interpreter->values_stack.count = frame.value_stack_idx;
             break;
         }
         case CONT_DISCARD: {
-            frame = pop(&global_interpreter->expr_frames);
-            global_interpreter->current_expr_plan = frame.plan;
-            global_interpreter->current_expr_plan_idx = frame.plan_idx;
-            global_interpreter->values_stack.count = frame.value_stack_idx;
+            restore_previous_frame();
             global_interpreter->state = STATE_RUNNING;
             global_interpreter->pc = c.as.stmt_discard.next;
             break;
         }
         case CONT_LOOP_MIN: {
             value v = pop(&global_interpreter->values_stack);
-            c.as.stmt_for.end->as.stmt_for_end.min = value_is_num(v).as.number;
-            frame = pop(&global_interpreter->expr_frames);
-            global_interpreter->current_expr_plan = frame.plan;
-            global_interpreter->current_expr_plan_idx = frame.plan_idx;
-            global_interpreter->values_stack.count = frame.value_stack_idx;
+            c.as.cont_stmt_for.end->as.stmt_for_end.min = value_is_num(v).as.number;
+            restore_previous_frame();
             global_interpreter->state = STATE_RUNNING;
-            global_interpreter->pc = c.as.stmt_for.end;
+            global_interpreter->pc = c.as.cont_stmt_for.end;
             break;
         }
         case CONT_LOOP_MAX: {
             value v = pop(&global_interpreter->values_stack);
-            c.as.stmt_for.end->as.stmt_for_end.max = value_is_num(v).as.number;
-            frame = pop(&global_interpreter->expr_frames);
-            global_interpreter->current_expr_plan = frame.plan;
-            global_interpreter->current_expr_plan_idx = frame.plan_idx;
-            global_interpreter->values_stack.count = frame.value_stack_idx;
+            c.as.cont_stmt_for.end->as.stmt_for_end.max = value_is_num(v).as.number;
+            restore_previous_frame();
             global_interpreter->state = STATE_CONTINUE_EXPR_EVALUATION;
+            break;
+        }
+        case CONT_WHILE: {
+            value v = value_is_num(pop(&global_interpreter->values_stack));
+            if (is_true(v)) {
+                global_interpreter->pc = c.as.cont_stmt_while.entry;
+            } else {
+                global_interpreter->pc = c.as.cont_stmt_while.out;
+            }
+            restore_previous_frame();
+            global_interpreter->state = STATE_RUNNING;
             break;
         }
         default:
             ERR("Unknown continuation type");
     }
 }
+
+void do_function_exit();
 
 bool step_expr() {
     if ((int)global_interpreter->current_expr_plan_idx >= global_interpreter->current_expr_plan.count) {
@@ -1165,24 +1206,28 @@ bool step_expr() {
             break;
         }
         case OP_BINARY_OP: {
-            value right = pop(&global_interpreter->values_stack);
-            value left = pop(&global_interpreter->values_stack);
             token_type op = expr->as.op;
 
             // TODO
             if (op == TOKEN_AND) {
-                // value left_v = value_is_num(eval_expr(left));
-                // if (left_v.as.number == 0)
-                //     return left_v;
-                // return value_is_num(eval_expr(right));
+                value v = value_is_num(pop(&global_interpreter->values_stack));
+                if (v.as.number == 0) {
+                    append(&global_interpreter->values_stack, v);
+                    global_interpreter->current_expr_plan_idx = global_interpreter->current_expr_plan.count;
+                } else {
+                    global_interpreter->current_expr_plan_idx++;
+                }
             } else if (op == TOKEN_OR) {
-                // value left_v = value_is_num(eval_expr(left));
-                // if (left_v.as.number != 0)
-                //     return left_v;
-                // return value_is_num(eval_expr(right));
+                value v = value_is_num(pop(&global_interpreter->values_stack));
+                if (v.as.number != 0) {
+                    append(&global_interpreter->values_stack, v);
+                    global_interpreter->current_expr_plan_idx = global_interpreter->current_expr_plan.count;
+                } else {
+                    global_interpreter->current_expr_plan_idx++;
+                }
             } else {
-                value left_v = value_is_num(left);
-                value right_v = value_is_num(right);
+                value right_v = value_is_num(pop(&global_interpreter->values_stack));
+                value left_v = value_is_num(pop(&global_interpreter->values_stack));
                 int left = left_v.as.number;
                 int right = right_v.as.number;
                 int result = 0;
@@ -1211,7 +1256,6 @@ bool step_expr() {
                 value v = {VAL_NUM, .as.number = result};
                 append(&global_interpreter->values_stack, v);
                 global_interpreter->current_expr_plan_idx++;
-                break;
             }
             break;
         }
@@ -1239,24 +1283,32 @@ bool step_expr() {
             }
 
             if (function->type == SYMBOL_FUNCTION_NATIVE) {
-                //  TODO: Handle argc
                 global_interpreter->scope_depth++;
                 function->as.native_func.function(NULL);
+
+                if (expr->as.func.stmt) {
+                    do_function_exit();
+                } else {
+                    // If we are inside an expression, we fake the whole return procedure
+                    expr_save_frame_new((continuation){.type = CONT_DISCARD});
+                    return_call r = {
+                        .return_stmt = NULL, .stack_idx = global_interpreter->symbol_count, .is_expr_call = true};
+                    append(&global_interpreter->returns, r);
+                    do_function_exit();
+                    pop(&global_interpreter->values_stack);
+                }
+
                 if (global_interpreter->state != STATE_SLEEPING) {
                     global_interpreter->state = STATE_EXPR_EVALUATION;
-                }
-                // Will call return
-                if (global_interpreter->pc->type != STMT_FUNCTION_EXIT) {
-                    global_interpreter->pc = global_interpreter->pc->next;
                 }
                 global_interpreter->current_expr_plan_idx++;
                 break;
             }
 
             if (expr->as.func.stmt) {
-                schedule_function_call(function->name, get_current_value_stack_delta(), function);
+                schedule_function_call(function->name, expr->as.func.argc, function);
             } else {
-                schedule_expr_function_call(function->name, get_current_value_stack_delta(), function);
+                schedule_expr_function_call(function->name, expr->as.func.argc, function);
             }
 
             global_interpreter->current_expr_plan_idx++;
@@ -1304,10 +1356,12 @@ void breakpoint_fn(stmt_funcall *call) {
 }
 
 void register_std_lib() {
+    register_function("PRINTN", printn_fn, -1);
     register_function("PRINT", print_fn, -1);
     register_function("EXIT", exit_fn, 1);
     register_function("SLEEP", sleep_fn, 1);
     register_function("BP", breakpoint_fn, 0);
+    register_function("MOD", mod_fn, 2);
 }
 
 void init_interpreter(basic_interpreter *i, const char *src) {
@@ -1355,18 +1409,9 @@ void do_function_exit() {
         }
         global_interpreter->state = STATE_EXPR_EVALUATION;
 
-        expr_frame frame = pop(&global_interpreter->expr_frames);
-        if ((int)frame.plan_idx == frame.plan.count) {
-            ERR("HERE\n");
-        }
-        global_interpreter->current_expr_plan = frame.plan;
-        global_interpreter->current_expr_plan_idx = frame.plan_idx;
-        global_interpreter->values_stack.count = frame.value_stack_idx;
-
+        restore_previous_frame();
         append(&global_interpreter->values_stack, ret);
     }
-
-    global_interpreter->pending_return = false;
 }
 
 bool state_expr_evaluation() {
@@ -1403,11 +1448,7 @@ bool state_expr_evaluation() {
                 ret = pop(&global_interpreter->values_stack);
             }
 
-            expr_frame frame = pop(&global_interpreter->expr_frames);
-            global_interpreter->current_expr_plan = frame.plan;
-            global_interpreter->current_expr_plan_idx = frame.plan_idx;
-            global_interpreter->values_stack.count = frame.value_stack_idx;
-
+            restore_previous_frame();
             append(&global_interpreter->values_stack, ret);
             return true;
         }
@@ -1510,11 +1551,11 @@ bool step_program(basic_interpreter *i) {
             break;
         }
         case STMT_FOR: {
-            continuation min = {.type = CONT_LOOP_MIN, .as.stmt_for = {.entry = &s->as.stmt_for, .end = s->jmp}};
+            continuation min = {.type = CONT_LOOP_MIN, .as.cont_stmt_for = {.entry = &s->as.stmt_for, .end = s->jmp}};
             expr_save_frame_new(min);
             build_expr_plan(&s->as.stmt_for.min);
 
-            continuation max = {.type = CONT_LOOP_MAX, .as.stmt_for = {.entry = &s->as.stmt_for, .end = s->jmp}};
+            continuation max = {.type = CONT_LOOP_MAX, .as.cont_stmt_for = {.entry = &s->as.stmt_for, .end = s->jmp}};
             expr_save_frame_new(max);
             build_expr_plan(&s->as.stmt_for.max);
 
@@ -1526,7 +1567,6 @@ bool step_program(basic_interpreter *i) {
             int min = s->as.stmt_for_end.min;
             int max = s->as.stmt_for_end.max;
 
-            BREAKPOINT();
             if (max == min) {
                 i->pc = s->next;
             }
@@ -1537,6 +1577,7 @@ bool step_program(basic_interpreter *i) {
                 s->as.stmt_for_end.stack_saved = global_interpreter->symbol_count;
                 var = get_symbol_id(create_symbol(variable, SYMBOL_VARIABLE_INT));
                 var->as.integer = min;
+                var->scope_depth = global_interpreter->scope_depth;
             } else {
                 var->as.integer++;
             }
@@ -1563,14 +1604,17 @@ bool step_program(basic_interpreter *i) {
             global_interpreter->state = STATE_EXPR_EVALUATION;
             break;
         }
-        case STMT_WHILE:
+        case STMT_WHILE: {
+            BREAKPOINT();
+            continuation should_loop = {.type = CONT_WHILE,
+                                        .as.cont_stmt_while = {.entry = s->next, .out = s->jmp->next}};
+            expr_save_frame_new(should_loop);
+            build_expr_plan(&s->as.stmt_while.condition);
+            global_interpreter->state = STATE_EXPR_EVALUATION;
+            break;
+        }
         case STMT_WHILEEND: {
-            value condition = eval_expr(&s->as.stmt_while.condition);
-            if (is_true(condition)) {
-                i->pc = s->jmp;
-            } else {
-                i->pc = s->next;
-            }
+            global_interpreter->pc = s->jmp;
             break;
         }
         case STMT_FUNCDECL: {

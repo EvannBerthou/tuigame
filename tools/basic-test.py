@@ -47,12 +47,13 @@ for test in tests:
         if line == '---':
             out = program
             continue
-        out.append(line)
+        out.append(line.strip())
 
     full_program = '\n'.join(program)
     try:
         p = subprocess.run(['./build/basic', '-'], input=full_program, capture_output=True, text=True, timeout=1)
         test_result = p.stdout.strip()
+        test_result = '\n'.join([x.strip() for x in test_result.split('\n')])
     except:
         test_result = "Test case Timeout"
 

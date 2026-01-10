@@ -24,7 +24,7 @@ analysis:
 	cppcheck --std=c23 --suppress=missingIncludeSystem --suppress=staticFunction --check-level=exhaustive src/main.c src/basic.c src/arena.c src/bootseq.c
 
 basic-build: src/basic.c
-	$(CC) $(CFLAGS) -I./include src/basic.c src/arena.c -o build/basic -ggdb -DBASIC_TEST
+	$(CC) $(CFLAGS) -I./include src/basic.c src/arena.c -o build/basic -ggdb -DBASIC_TEST -lm
 
 test: basic-build
 	python tools/basic-test.py

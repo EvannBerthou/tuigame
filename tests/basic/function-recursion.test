@@ -5,7 +5,7 @@
 ---
 FUNC COUNTDOWN(n);
     IF n >= 0;
-        PRINT(n);
+        PRINTN(n);
         COUNTDOWN(n - 1);
     END
 END

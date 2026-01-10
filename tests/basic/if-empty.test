@@ -1,0 +1,43 @@
+OK
+OK
+OK
+OK
+ELSE
+OK
+OK
+---
+IF 0;
+END
+
+PRINTN("OK");
+
+IF 1;
+END
+
+PRINTN("OK");
+
+IF 0;
+ELSE
+END
+
+PRINTN("OK");
+
+IF 1;
+ELSE
+END
+
+PRINTN("OK");
+
+IF 0;
+ELSE
+    PRINTN("ELSE");
+END
+
+PRINTN("OK");
+
+IF 1;
+ELSE
+    PRINTN("ELSE");
+END
+
+PRINTN("OK");

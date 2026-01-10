@@ -1,0 +1,7 @@
+2
+---
+FUNC X();
+    RETURN 1;
+END
+
+PRINTN(X() + X());

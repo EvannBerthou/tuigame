@@ -2,8 +2,8 @@ A
 1
 ---
 FUNC A();
-    PRINT("A");
+    PRINTN("A");
     RETURN 1;
 END
 
-PRINT(A());
+PRINTN(A());

@@ -13,11 +13,11 @@ FUNC FIB(n);
         IF n == 1;
             RETURN 1;
         ELSE
-            RETURN FIB n - 1 + FIB n - 2;
+            RETURN FIB(n - 1) + FIB(n - 2);
         END
     END
 END
 
 FOR i IN 0..7;
-    PRINT FIB i;
+    PRINTN(FIB(i));
 END

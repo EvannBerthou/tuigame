@@ -10,11 +10,11 @@ FUNC OUTER();
     FUNC INNER();
         Y = Y + 1;
         X = X + 1;
-        PRINT "Inner: " Y;
+        PRINTN("Inner: " Y);
     END
     INNER();
-    PRINT "Outer again: " X;
+    PRINTN("Outer again: " X);
 END
 
 OUTER();
-PRINT "Outer: " X;
+PRINTN("Outer: " X);

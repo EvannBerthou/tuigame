@@ -3,7 +3,7 @@
 2
 ---
 FUNC SHOW(x);
-    PRINT(x);
+    PRINTN(x);
 END
 
 FOR i IN 0..3;

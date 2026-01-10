@@ -1,3 +1,3 @@
 Hello
 ---
-PRINT("Hello");
+PRINTN("Hello");

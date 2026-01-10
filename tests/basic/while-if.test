@@ -5,9 +5,9 @@ Middle
 I = 1;
 WHILE I <= 3;
     IF I == 2;
-        PRINT("Middle");
+        PRINTN("Middle");
     ELSE
-        PRINT(I);
+        PRINTN(I);
     END
     I = I + 1;
 END

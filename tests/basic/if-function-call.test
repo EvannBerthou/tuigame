@@ -5,5 +5,5 @@ FUNC F();
 END
 
 IF F();
-    PRINT("True");
+    PRINTN("True");
 END

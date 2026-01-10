@@ -9,10 +9,10 @@ FUNC FACT(n);
     IF n == 0;
         RETURN 1;
     ELSE
-        RETURN n * FACT n - 1;
+        RETURN n * FACT(n - 1);
     END
 END
 
 FOR i IN 0..6;
-    PRINT FACT i;
+    PRINTN(FACT(i));
 END

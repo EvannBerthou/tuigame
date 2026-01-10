@@ -4,6 +4,6 @@
 ---
 I = 3;
 WHILE I > 0;
-    PRINT(I);
+    PRINTN(I);
     I = I - 1;
 END

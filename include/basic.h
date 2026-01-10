@@ -299,6 +299,7 @@ typedef enum {
     CONT_DISCARD,
     CONT_LOOP_MIN,
     CONT_LOOP_MAX,
+    CONT_WHILE,
 } continuation_type;
 
 typedef struct {
@@ -318,7 +319,11 @@ typedef struct {
         struct {
             stmt_for *entry;
             stmt *end;
-        } stmt_for;
+        } cont_stmt_for;
+        struct {
+            stmt *entry;
+            stmt *out;
+        } cont_stmt_while;
     } as;
 } continuation;
 
@@ -328,6 +333,7 @@ typedef struct {
     size_t value_stack_idx;
     continuation continuation;
     bool own_returns;
+    bool pending_return;
 } expr_frame;
 
 typedef struct {

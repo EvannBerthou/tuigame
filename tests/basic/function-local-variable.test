@@ -4,14 +4,14 @@
 ---
 FUNC B();
     X = 10;
-    PRINT(X);
+    PRINTN(X);
 END
 
 FUNC A();
     X = 5;
-    PRINT(X);
+    PRINTN(X);
     B();
-    PRINT(X);
+    PRINTN(X);
 END
 
 A();

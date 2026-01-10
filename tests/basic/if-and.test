@@ -1,0 +1,38 @@
+Inside first IF
+Inside second ELSE
+Inside YES
+Inside YES
+Inside AND YES
+Inside NO
+Inside ELSE AND NO
+---
+
+FUNC YES();
+    PRINTN("Inside YES");
+    RETURN 1;
+END
+
+FUNC NO();
+    PRINTN("Inside NO");
+    RETURN 0;
+END
+
+IF 1 AND 2;
+    PRINTN("Inside first IF");
+END
+
+IF 0 AND 2;
+    PRINTN("Inside second IF");
+ELSE
+    PRINTN("Inside second ELSE");
+END
+
+IF YES() AND YES();
+    PRINTN("Inside AND YES");
+END
+
+IF NO() AND NO();
+    PRINTN("Inside AND NO");
+ELSE
+    PRINTN("Inside ELSE AND NO");
+END

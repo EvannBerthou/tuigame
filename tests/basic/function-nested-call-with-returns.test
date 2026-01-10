@@ -8,4 +8,4 @@ FUNC A();
     RETURN B();
 END
 
-PRINT(A());
+PRINTN(A());

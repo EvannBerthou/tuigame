@@ -4,4 +4,4 @@ FUNC F();
 END
 
 F();
-PRINT("OK");
+PRINTN("OK");

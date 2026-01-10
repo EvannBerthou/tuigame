@@ -1,0 +1,48 @@
+Inside first IF
+Inside YES
+Inside second IF
+Long
+Inside NO
+Long else
+Inside YES
+Only one YES
+Inside NO
+Inside NO
+Inside NO
+---
+FUNC YES();
+    PRINTN("Inside YES");
+    RETURN 1;
+END
+
+FUNC NO();
+    PRINTN("Inside NO");
+    RETURN 0;
+END
+
+
+IF 1 OR YES();
+    PRINTN("Inside first IF");
+END
+
+IF 0 OR YES();
+    PRINTN("Inside second IF");
+END
+
+IF 0 OR 0 OR 0 OR 1 OR YES();
+    PRINTN("Long");
+END
+
+IF 0 OR 0 OR 0 OR NO();
+    PRINTN("Unreachable");
+ELSE
+    PRINTN("Long else");
+END
+
+IF YES() OR YES() OR YES();
+    PRINTN("Only one YES");
+END
+
+IF NO() OR NO() OR NO();
+    PRINTN("Inside 3 NO");
+END

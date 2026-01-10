@@ -1,5 +1,5 @@
 Big
 ---
 IF 2 > 1;
-    PRINT("Big");
+    PRINTN("Big");
 END
