@@ -1,0 +1,20 @@
+deep
+---
+IF 1;
+    IF 1;
+        IF 1;
+            IF 1;
+                IF 1;
+                    PRINT("deep");
+                ELSE;
+                    PRINT("never");
+                END
+            END
+        ELSE;
+            PRINT("never");
+        END
+    END
+ELSE;
+    PRINT("never");
+END
+

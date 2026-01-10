@@ -1,3 +1,17 @@
+FUNC BURN(x);
+    a = x + 1;
+    b = a * 2;
+    c = b - 3 * i;
+    d = (c * 4) / 2;
+    RETURN d;
+END
+
+i = 0;
 WHILE 1;
-    PRINTN("Hello");
+    PRINTN(i);
+    BURN(i);
+    i = i + 1;
+    IF i == 100000;
+        i = 0;
+    END
 END

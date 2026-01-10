@@ -373,4 +373,7 @@ void register_variable_string(const char *name, const char *value);
 void advance_interpreter_time(basic_interpreter *i, float time);
 void destroy_interpreter();
 
+void basic_push_function_result(int result);
+int basic_pop_value_num();
+
 #endif

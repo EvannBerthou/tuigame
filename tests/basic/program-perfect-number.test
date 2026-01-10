@@ -1,0 +1,29 @@
+6
+28
+---
+FUNC ISPERFECT(n);
+    IF n < 2;
+        RETURN 0;
+    END
+
+    sum = 0;
+
+    FOR i IN 1..n;
+        IF MOD(n i) == 0 AND i != n;
+            sum = sum + i;
+        END
+    END
+
+    IF sum == n;
+        RETURN 1;
+    END
+
+    RETURN 0;
+END
+
+FOR k IN 1..30;
+    IF ISPERFECT(k);
+        PRINTN(k);
+    END
+END
+

@@ -639,7 +639,12 @@ stmt *parse_while() {
     return result;
 }
 
+bool parsing_funcdecl = false;
+
 stmt *parse_funcdecl() {
+    if (parsing_funcdecl) {
+        ERR("Nested function declaration are not allowed");
+    }
     stmt *result = arena_alloc(interpreter_arena, sizeof(*result));
     result->type = STMT_FUNCDECL;
     result->next = NULL;
@@ -669,7 +674,10 @@ stmt *parse_funcdecl() {
     function_exit_stmt->next = end;
     function_exit_stmt->jmp = NULL;
 
+    parsing_funcdecl = true;
     stmt *body = parse_block();
+    parsing_funcdecl = false;
+
     stmt *last_stmt = stmt_tail(body);
     if (last_stmt == NULL || last_stmt->type != STMT_RETURN) {
         stmt *return_stmt = arena_alloc(interpreter_arena, sizeof(*return_stmt));
@@ -820,7 +828,6 @@ void print_val(value *v) {
 }
 
 void internal_print_fn() {
-    BREAKPOINT();
     expr_frame *top_frame = &global_interpreter->expr_frames.items[global_interpreter->expr_frames.count - 1];
     size_t start = top_frame->value_stack_idx;
     size_t end = global_interpreter->values_stack.count;
@@ -862,7 +869,6 @@ void mod_fn(stmt_funcall *call) {
     value v = value_is_num(pop(&global_interpreter->values_stack));
     value result = {.type = VAL_NUM, .as.number = fmod((int)v.as.number, (int)mod.as.number)};
     append(&global_interpreter->values_stack, result);
-    BREAKPOINT();
 }
 value eval_expr(expr *expr) {
     (void)expr;
@@ -941,12 +947,11 @@ void build_stmt_funcall_plan(stmt_funcall *funcall) {
     append(ops, op);
 }
 
-expr_op nop = {.type = OP_NOP};
-
 void restore_previous_frame() {
     if (global_interpreter->expr_frames.count == 0) {
         ERR("No more frame to restore");
     }
+    free(global_interpreter->current_expr_plan.items);
     expr_frame frame = pop(&global_interpreter->expr_frames);
     global_interpreter->current_expr_plan = frame.plan;
     global_interpreter->current_expr_plan_idx = frame.plan_idx;
@@ -954,9 +959,15 @@ void restore_previous_frame() {
     global_interpreter->pending_return = frame.pending_return;
 }
 
+expr_op *nop_node() {
+    expr_op *result = malloc(sizeof(*result));
+    result->type = OP_NOP;
+    return result;
+}
+
 void expr_save_frame_new(continuation c) {
     if (global_interpreter->current_expr_plan.count == 0) {
-        global_interpreter->current_expr_plan.items = &nop;
+        global_interpreter->current_expr_plan.items = nop_node();
         global_interpreter->current_expr_plan.count = 1;
         global_interpreter->current_expr_plan.capacity = 1;
     }
@@ -978,7 +989,7 @@ void expr_save_frame_new(continuation c) {
 
 void expr_save_frame_resume(continuation c) {
     if (global_interpreter->current_expr_plan.count == 0) {
-        global_interpreter->current_expr_plan.items = &nop;
+        global_interpreter->current_expr_plan.items = nop_node();
         global_interpreter->current_expr_plan.count = 1;
         global_interpreter->current_expr_plan.capacity = 1;
     }
@@ -997,6 +1008,8 @@ void expr_save_frame_resume(continuation c) {
     global_interpreter->current_expr_plan.items = NULL;
     global_interpreter->pending_return = false;
 }
+
+void discard_current_frame();
 
 void schedule_function_call(const char *name, size_t argc, symbol *function) {
     size_t expected_arg_count = function->as.funcdecl.arg_count;
@@ -1049,6 +1062,7 @@ bool is_true(value v) {
 }
 
 void discard_current_frame() {
+    free(global_interpreter->current_expr_plan.items);
     global_interpreter->current_expr_plan.items = NULL;
     global_interpreter->current_expr_plan.count = 0;
     global_interpreter->current_expr_plan.capacity = 0;
@@ -1287,6 +1301,7 @@ bool step_expr() {
                 function->as.native_func.function(NULL);
 
                 if (expr->as.func.stmt) {
+                    expr_save_frame_new((continuation){.type = CONT_DISCARD});
                     do_function_exit();
                 } else {
                     // If we are inside an expression, we fake the whole return procedure
@@ -1402,7 +1417,9 @@ void do_function_exit() {
 
     if (!r.is_expr_call) {
         global_interpreter->pc = r.return_stmt;
-        global_interpreter->state = STATE_RUNNING;
+        global_interpreter->state = STATE_EXPR_EVALUATION;
+        restore_previous_frame();
+        append(&global_interpreter->values_stack, ret);
     } else {
         if (global_interpreter->expr_frames.count == 0) {
             ERR("Missing expression frame for function return");
@@ -1605,7 +1622,6 @@ bool step_program(basic_interpreter *i) {
             break;
         }
         case STMT_WHILE: {
-            BREAKPOINT();
             continuation should_loop = {.type = CONT_WHILE,
                                         .as.cont_stmt_while = {.entry = s->next, .out = s->jmp->next}};
             expr_save_frame_new(should_loop);
@@ -1665,6 +1681,15 @@ long long timeInMilliseconds(void) {
 
     gettimeofday(&tv, NULL);
     return (((long long)tv.tv_sec) * 1000) + (tv.tv_usec / 1000);
+}
+
+int basic_pop_value_num() {
+    return value_is_num(pop(&global_interpreter->values_stack)).as.number;
+}
+
+void basic_push_function_result(int result) {
+    value v = {.type = VAL_NUM, .as.number = result};
+    append(&global_interpreter->values_stack, v);
 }
 
 #ifdef BASIC_TEST

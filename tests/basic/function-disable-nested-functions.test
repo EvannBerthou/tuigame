@@ -1,0 +1,8 @@
+Nested function declaration are not allowed
+*
+---
+FUNC OUTER();
+    FUNC INNER();
+        RETURN 0;
+    END
+END

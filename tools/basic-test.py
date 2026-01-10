@@ -1,6 +1,7 @@
 from pathlib import Path
 import os, sys
 import subprocess
+import itertools
 
 failed_only = False
 stop_first_fail = False
@@ -52,19 +53,31 @@ for test in tests:
     full_program = '\n'.join(program)
     try:
         p = subprocess.run(['./build/basic', '-'], input=full_program, capture_output=True, text=True, timeout=1)
-        test_result = p.stdout.strip()
-        test_result = '\n'.join([x.strip() for x in test_result.split('\n')])
+        stripped = p.stdout.strip()
+        if stripped == '':
+            test_result = []
+        else:
+            test_result = stripped.split('\n')
     except:
         test_result = "Test case Timeout"
 
-    expected = '\n'.join(expected_ouput)
-    if test_result != expected:
+
+    test_success = True
+    for expected, result in itertools.zip_longest(expected_ouput, test_result):
+        if expected == '*':
+            continue
+        elif expected is None or result is None:
+            test_success = False
+        elif expected.strip() != result.strip():
+            test_success = False
+
+    if not test_success:
         failed += 1
         print(f"\033[91mTest case {test} : Test failed\033[0m")
         print("Expected:")
-        print(expected)
+        print('\n'.join(expected_ouput))
         print("But recieved:")
-        print(test_result)
+        print('\n'.join(test_result))
         if stop_first_fail:
             print("Program:")
             print(full_program)

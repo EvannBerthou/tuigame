@@ -3,12 +3,18 @@
 
 #include <stddef.h>
 
-//TODO: Could use arena
+#define DYNARRAY_CAPACITY_LIMIT 65536
+
+// TODO: Could use arena
 #define append(l, x)                                                               \
     do {                                                                           \
         if ((l)->count == (l)->capacity) {                                         \
             (l)->capacity = (l)->capacity == 0 ? 64 : (l)->capacity * 2;           \
             (l)->items = realloc((l)->items, sizeof(*(l)->items) * (l)->capacity); \
+        }                                                                          \
+        if ((l)->capacity > DYNARRAY_CAPACITY_LIMIT) {                             \
+            fprintf(stderr, "Too much allocation\n");                              \
+            exit(1);                                                               \
         }                                                                          \
         (l)->items[(l)->count++] = (x);                                            \
     } while (0)

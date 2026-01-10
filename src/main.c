@@ -1100,11 +1100,13 @@ void test_render(terminal *term, void *args) {
 static void put_pixel(int *fb, int x, int y, int color);
 
 void put_pixel_fn(stmt_funcall *call) {
+    (void)call;
     exec_process *p = (exec_process *)active_term->args;
-    int x = eval_expr(&call->items[0]).as.number;
-    int y = eval_expr(&call->items[1]).as.number;
-    int c = eval_expr(&call->items[2]).as.number;
+    int c = basic_pop_value_num();
+    int y = basic_pop_value_num();
+    int x = basic_pop_value_num();
     put_pixel(p->fb[1 - p->fb_idx], x, y, c % TERM_COUNT);
+    basic_push_function_result(0);
 }
 
 void flip_render_fn(stmt_funcall *call) {
@@ -1153,7 +1155,7 @@ int exec_update(terminal *t, void *args) {
         return 1;
     }
     advance_interpreter_time(&p->interpreter, GetFrameTime());
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 100000; i++) {
         if (!step_program(&p->interpreter)) {
             t->log_count--;
             return 1;

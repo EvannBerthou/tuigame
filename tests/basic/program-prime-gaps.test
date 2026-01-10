@@ -1,0 +1,35 @@
+2 3
+3 5
+5 7
+7 11
+11 13
+13 17
+17 19
+19 23
+23 29
+---
+FUNC ISPRIME(n);
+    IF n < 2;
+        RETURN 0;
+    END
+    FOR i IN 2..n;
+        IF MOD(n i) == 0 AND i != n;
+            RETURN 0;
+        END
+    END
+    RETURN 1;
+END
+
+prev = 0;
+
+FOR k IN 2..30;
+    IF ISPRIME(k);
+        IF prev != 0;
+            PRINT(prev);
+            PRINT(" ");
+            PRINTN(k);
+        END
+        prev = k;
+    END
+END
+

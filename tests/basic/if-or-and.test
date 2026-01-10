@@ -1,0 +1,46 @@
+Inside first IF
+Printed due to parentheses
+Chain true
+Nonzero values treated as true
+Complex true
+---
+IF 1 AND 0 OR 1;
+    PRINTN("Inside first IF");
+END
+
+IF (1 AND 0) OR 0;
+    PRINTN("Not printed");
+END
+
+IF 1 AND (0 OR 0);
+    PRINTN("Also not printed");
+END
+
+IF 1 AND (0 OR 1);
+    PRINTN("Printed due to parentheses");
+END
+
+IF 1 OR 0 AND 0 OR 0 AND 1 OR 0;
+    PRINTN("Chain true");
+END
+
+IF 0 AND 1 OR 0 AND 1 OR 0;
+    PRINTN("Chain false");
+END
+
+IF 2 AND -1 OR 0;
+    PRINTN("Nonzero values treated as true");
+END
+
+IF 0 AND 5 OR 0;
+    PRINTN("Should not print");
+END
+
+IF (1 AND (0 OR 1)) OR ((0 OR 0) AND 1);
+    PRINTN("Complex true");
+END
+
+IF (0 AND (1 OR 1)) OR (0 AND (1 OR 1));
+    PRINTN("Complex false");
+END
+

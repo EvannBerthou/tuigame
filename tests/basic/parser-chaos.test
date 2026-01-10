@@ -1,0 +1,25 @@
+0
+1
+2
+0
+1
+0
+6
+---
+FUNC CHAOS(n);
+    WHILE n > 0;
+        IF n AND 1 OR 0;
+            FOR i IN 0..n;
+                IF i == n;
+                ELSE
+                    PRINTN(i);
+                END
+            END
+        ELSE
+        END
+        n = n - 1;
+    END
+    RETURN 6;
+END
+
+PRINT(CHAOS(3));

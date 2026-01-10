@@ -26,16 +26,16 @@ FOR px IN 0..80;
             END 
         END 
         IF escaped == 0; 
-            PUTPIXEL px py 7; 
+            PUTPIXEL(px py 7);
         ELSE 
-            PUTPIXEL px py iter + 1; 
+            PUTPIXEL(px py iter + 1);
         END 
     END 
 END 
 
-RENDER;
+RENDER();
 
 WHILE TRUE;
-    SLEEP 10;
+    SLEEP(10);
 END
 
