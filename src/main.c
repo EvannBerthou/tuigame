@@ -16,11 +16,21 @@ const float HEIGHT = 720;
 
 #define FB_SIZE_WIDTH 80
 #define FB_SIZE_HEIGHT 60
-#define FB_SIZE FB_SIZE_WIDTH *FB_SIZE_HEIGHT
+#define FB_SIZE (FB_SIZE_WIDTH * FB_SIZE_HEIGHT)
+
+typedef struct terminal terminal;
 
 Shader terminal_shader = {0};
 RenderTexture2D target = {0};
 Font terminal_font = {0};
+
+#define MAIL_PROCESS_ANWSER_MAX_LENGTH 23
+
+typedef struct {
+    size_t selected_mail_idx;
+    char anwser[MAIL_PROCESS_ANWSER_MAX_LENGTH];
+    size_t anwser_ptr;
+} mail_process;
 
 typedef struct {
     const char *ip;
@@ -53,8 +63,66 @@ typedef struct {
     int fb_idx;
 } exec_process;
 
+typedef struct {
+    int selected_index;
+    struct {
+        terminal **items;
+        int count;
+        int capacity;
+    } machines;
+} machines_process;
+
 #define MAX_INPUT_LENGTH 40
-#define MAX_LINE_COUNT_PER_SCREEN 21
+#define MAX_LINE_COUNT_PER_SCREEN 16
+
+typedef struct {
+    char **items;
+    int count;
+    int capacity;
+} text_lines;
+
+void free_text_lines(text_lines *lines) {
+    if (lines == NULL) {
+        return;
+    }
+    for (int i = 0; i < lines->count; i++) {
+        free(lines->items[i]);
+    }
+    free(lines->items);
+    lines->items = NULL;
+    lines->count = 0;
+    lines->capacity = 0;
+}
+
+text_lines text_split(char *content, char sep) {
+    text_lines result = {0};
+
+    if (content == NULL) {
+        return result;
+    }
+
+    char *s = content;
+    char *last = s;
+    while (*s) {
+        if (*s == sep) {
+            *s = '\0';
+            append(&result, strdup(last));
+            s++;
+            last = s;
+        } else {
+            s++;
+        }
+    }
+    return result;
+}
+
+size_t get_lines_total_size(text_lines *lines) {
+    size_t size = 0;
+    for (int i = 0; i < lines->count; i++) {
+        size += strlen(lines->items[i]);
+    }
+    return size;
+}
 
 typedef struct file_node file_node;
 
@@ -62,11 +130,27 @@ struct file_node {
     file_node *parent;
     const char *name;
     bool folder;
-    char *content;
+    text_lines lines;
+    size_t content_size;
     file_node **children;
     int children_capacity;
     int children_count;
 };
+
+const char *node_get_content(file_node *node) {
+    if (node->folder) {
+        return NULL;
+    }
+    char *content = malloc(node->content_size + 1);
+    assert(content != NULL);
+    content[0] = '\0';
+
+    char *s = content;
+    for (int i = 0; i < node->lines.count; i++) {
+        s = strcat(s, node->lines.items[i]);
+    }
+    return content;
+}
 
 void file_node_append_children(file_node *root, file_node *children) {
     if (root->folder == false) {
@@ -81,12 +165,13 @@ void file_node_append_children(file_node *root, file_node *children) {
     root->children_count++;
 }
 
-file_node *file_new(const char *name, const char *content) {
+file_node *file_new(const char *name, text_lines lines) {
     file_node *result = malloc(sizeof(file_node));
     assert(result != NULL);
     result->parent = NULL;
     result->name = strdup(name);
-    result->content = strdup(content);
+    result->lines = lines;
+    result->content_size = get_lines_total_size(&result->lines);
     result->folder = false;
     result->children = NULL;
     result->children_count = 0;
@@ -99,7 +184,8 @@ file_node *folder_new(const char *name) {
     assert(result != NULL);
     result->parent = NULL;
     result->name = strdup(name);
-    result->content = NULL;
+    result->lines = (text_lines){0};
+    result->content_size = 0;
     result->folder = true;
     result->children = NULL;
     result->children_count = 0;
@@ -180,7 +266,7 @@ void file_node_append_folder_full_path(file_node *root, const char *path) {
     file_node_append_children(parent, folder_new(path + idx));
 }
 
-void file_node_append_file_full_path(file_node *root, const char *path, const char *content) {
+void file_node_append_file_full_path(file_node *root, const char *path, text_lines lines) {
     int idx = 0;
     do {
         int next_directory = TextFindIndex(path + idx, "/");
@@ -190,7 +276,7 @@ void file_node_append_file_full_path(file_node *root, const char *path, const ch
         idx += next_directory + 1;
     } while (true);
     file_node *parent = look_up_node(root, TextFormat("%.*s", idx, path));
-    file_node_append_children(parent, file_new(path + idx, content));
+    file_node_append_children(parent, file_new(path + idx, lines));
 }
 
 const char *get_file_full_path(file_node *node) {
@@ -255,7 +341,6 @@ typedef struct {
     file_node *pwd;
 } filesystem;
 
-typedef struct terminal terminal;
 typedef int (*process_init)(terminal *term, int argc, const char **argv);
 typedef int (*process_update)(terminal *term, void *args);
 typedef void (*process_render)(terminal *term, void *args);
@@ -265,6 +350,8 @@ struct terminal {
     const char *hostname;
     const char *ip;
 
+    // TODO: Make it a circular buffer to avoid huge memory usage
+    // TODO: Enable scrolling
     const char **logs;
     int log_capacity;
     int log_count;
@@ -285,6 +372,7 @@ struct terminal {
     bool render_not_ready;
 
     filesystem fs;
+    bool connected;
 };
 
 const int font_size = 28;
@@ -309,24 +397,25 @@ typedef struct {
 //   ls -> Add date
 //   edit -> Search
 
-#define COMMANDS       \
-    XI(list, "ls")     \
-    XI(cd, NULL)       \
-    XI(echo, NULL)     \
-    XI(print, NULL)    \
-    XI(path, NULL)     \
-    XI(pwd, NULL)      \
-    XI(create, NULL)   \
-    XI(connect, NULL)  \
-    XI(hostname, NULL) \
-    XIUR(mail, NULL)   \
-    XI(shutdown, NULL) \
-    XI(clear, NULL)    \
-    XI(ping, NULL)     \
-    XIUR(edit, NULL)   \
-    XIUR(help, NULL)   \
-    XIUR(test, NULL)   \
-    XIUR(exec, NULL)   \
+#define COMMANDS         \
+    XI(list, "ls")       \
+    XI(cd, NULL)         \
+    XI(echo, NULL)       \
+    XI(print, NULL)      \
+    XI(path, NULL)       \
+    XI(pwd, NULL)        \
+    XI(create, NULL)     \
+    XI(connect, NULL)    \
+    XIUR(machines, NULL) \
+    XI(hostname, NULL)   \
+    XIUR(mail, NULL)     \
+    XI(shutdown, NULL)   \
+    XI(clear, NULL)      \
+    XI(ping, NULL)       \
+    XIUR(edit, NULL)     \
+    XIUR(help, NULL)     \
+    XIUR(test, NULL)     \
+    XIUR(exec, NULL)     \
     XIU(netscan, "ns")
 
 #define XI(n, a) int n##_init(terminal *term, int argc, const char **argv);
@@ -500,7 +589,12 @@ bool ip_is_reachable(const terminal *from, const char *ip) {
 }
 
 void DrawTerminalLine(const char *text, int line) {
-    DrawTextEx(terminal_font, text, (Vector2){60, 40 + font_size * (line + 1)}, font_size, 1, WHITE);
+    DrawTextEx(terminal_font, text, (Vector2){60, 80 + 35 * line}, font_size, 1, WHITE);
+}
+
+void DrawHoveredTerminalLine(const char *text, int line) {
+    DrawRectangle(0, 75 + 35 * line, WIDTH, font_size + 5, WHITE);
+    DrawTextEx(terminal_font, text, (Vector2){60, 80 + 35 * line}, font_size, 1, BLACK);
 }
 
 void terminal_append_log(terminal *term, const char *text) {
@@ -579,8 +673,9 @@ void terminal_render_prompt(terminal *term) {
     DrawTerminalLine(prompt_text, last_line_index);
     // TODO: Blink qu'après 1 seconde d'inactivité
     if ((int)GetTime() % 2 == 0) {
-        DrawRectangle(60 + MeasureTextEx(terminal_font, prompt_text, font_size, 1).x + 8,
-                      40 + font_size * (last_line_index + 1) + 4, 10, font_size - 8, WHITE);
+        int x = 60 + MeasureTextEx(terminal_font, prompt_text, font_size, 1).x + 8;
+        int y = 80 + 35 * last_line_index + 4;
+        DrawRectangle(x, y, 10, font_size - 8, WHITE);
     }
 }
 
@@ -623,10 +718,10 @@ int next_power_of_two(int x) {
 int edit_first_frame = true;
 
 edit_line *edit_create_line(const char *content) {
-    edit_line *line = malloc(sizeof(edit_line));
+    edit_line *line = malloc(sizeof(*line));
     assert(line != NULL);
     line->length = strlen(content);
-    int capacity = next_power_of_two(line->length);
+    int capacity = next_power_of_two(line->length + 1);
     if (capacity < 16) {
         capacity = 16;
     }
@@ -656,7 +751,7 @@ int edit_init(terminal *term, int argc, const char **argv) {
         terminal_append_log(term, TextFormat("'%s' is a folder", file));
         return 1;
     }
-    edit_process *p = malloc(sizeof(edit_process));
+    edit_process *p = malloc(sizeof(*p));
     assert(p);
     p->node = node;
     p->cursor_col = 0;
@@ -664,16 +759,13 @@ int edit_init(terminal *term, int argc, const char **argv) {
     p->tooltip_info_remaining_time = 0;
     term->args = p;
 
-    int line_count = 0;
-    const char **lines = TextSplit(node->content, '\n', &line_count);
-    assert(line_count < 256);
     edit_first_frame = true;
 
-    p->root = edit_create_line(lines[0]);
+    p->root = edit_create_line(node->lines.items[0]);
     edit_line *last = p->root;
 
-    for (int i = 1; i < line_count; i++) {
-        edit_line *new = edit_create_line(lines[i]);
+    for (int i = 1; i < node->lines.count; i++) {
+        edit_line *new = edit_create_line(node->lines.items[i]);
         new->prev = last;
         last->next = new;
         last = new;
@@ -718,26 +810,15 @@ bool edit_append_line(edit_process *p, const char *content) {
 }
 
 void edit_save_file(edit_process *p) {
-    int total_length = -1;
+    free_text_lines(&p->node->lines);
     edit_line *line = p->root;
     while (line) {
-        total_length += line->length + 1;
+        append(&p->node->lines, strdup(line->content));
         line = line->next;
     }
-    total_length = fmax(1, total_length);
-    p->node->content = realloc((void *)p->node->content, total_length);
-    int write_idx = 0;
-    line = p->root;
-    while (line) {
-        strncpy((void *)(p->node->content + write_idx), line->content, line->length + 1);
-        write_idx += line->length;
-        p->node->content[write_idx] = '\n';
-        write_idx++;
-        line = line->next;
-    }
-    p->node->content[total_length] = '\0';
     p->tooltip_info = "Saved!";
     p->tooltip_info_remaining_time = 200;
+    p->node->content_size = get_lines_total_size(&p->node->lines);
 }
 
 void edit_remove_char_at_cursor(edit_process *p) {
@@ -1119,9 +1200,12 @@ int exec_init(terminal *t, int argc, const char **argv) {
     assert(p != NULL);
     p->filename = strdup(filepath);
     p->interpreter = (basic_interpreter){.print_fn = terminal_basic_print, .append_print_fn = terminal_append_print};
+    p->fb_idx = 0;
     memset(p->fb[0], 0, sizeof(*p->fb[0]) * FB_SIZE);
     memset(p->fb[1], 0, sizeof(*p->fb[1]) * FB_SIZE);
-    init_interpreter(&p->interpreter, file->content);
+    // TODO: Merge all lines into one
+    const char *program = node_get_content(file);
+    init_interpreter(&p->interpreter, program);
     register_function("PUTPIXEL", put_pixel_fn, 3);
     register_function("RENDER", flip_render_fn, 0);
     register_function("COLOR_RED", flip_render_fn, 0);
@@ -1170,83 +1254,98 @@ typedef struct {
     const char *from;
     const char *to;
     const char *content[8];
-    const char *anwsers[3];
-    int anwsers_count;
+    const char *expected_anwser;
+    bool password_found;
 } mail;
 
 // TODO: Load mail from external source
-mail mails[3] = {
-    {.short_subject = "Hello !",
-     .full_subject = "How are you doing",
-     .from = "abc@xxx.com (User 1)",
-     .to = "xyz@xxx.com (You)",
-     .content = {"Dear Man", "Hope you are doing well tonigh.", "Fuck you !!!", "Cheers."},
-     .anwsers = {"Yes", "No", "Maybe"},
-     .anwsers_count = 3},
-    {.short_subject = "Good bye !",
-     .full_subject = "See you soon !",
-     .from = "abc@xxx.com (User 1)",
-     .to = "xyz@xxx.com (You)",
-     .content = {"Dear Man", "A la prochaine"},
-     .anwsers = {"Yes", "No"},
-     .anwsers_count = 2},
-    {.short_subject = "Re",
-     .full_subject = "Re",
-     .from = "abc@xxx.com (User 1)",
-     .to = "xyz@xxx.com (You)",
-     .content = {"Dear Bro", "See you next time"},
-     .anwsers = {"No"},
-     .anwsers_count = 1},
+mail mails[] = {
+    {.short_subject = "Intruder",
+     .full_subject = "Unauthorized access attempt",
+     .from = "boss@xxx.com",
+     .to = "jerome@xxx.com",
+     .content = {"Hi Jerome,", "There may have been an", "unauthorized access attempt.", "Please check the logs on",
+                 "machine2 and send me the", "intruder's IP address.", "Regards,"},
+     .expected_anwser = "82.142.23.204"},
 };
-int mail_count = 3;
-int selected_mail_idx = 0;
-int selected_anwser_idx = 0;
+const int mail_count = sizeof(mails) / sizeof(*mails);
+
+int mail_init(terminal *term, int argc, const char **argv) {
+    (void)term;
+    (void)argc;
+    (void)argv;
+    mail_process *p = malloc(sizeof(*p));
+    assert(p);
+    p->anwser_ptr = 0;
+    p->selected_mail_idx = 0;
+    term->args = p;
+    return 0;
+}
 
 int mail_update(terminal *term, void *args) {
+    mail_process *p = (mail_process *)args;
     term->title = "Mails";
     if (IsKeyPressed(KEY_A)) {
         return 1;
     }
     if (IsKeyPressed(KEY_DOWN)) {
-        selected_mail_idx = fmin(mail_count - 1, selected_mail_idx + 1);
-        selected_anwser_idx = 0;
+        p->selected_mail_idx = fmin(mail_count - 1, p->selected_mail_idx + 1);
+        p->anwser_ptr = 0;
     }
     if (IsKeyPressed(KEY_UP)) {
-        selected_mail_idx = fmax(0, selected_mail_idx - 1);
-        selected_anwser_idx = 0;
-    }
-    if (IsKeyPressed(KEY_LEFT)) {
-        selected_anwser_idx--;
-        if (selected_anwser_idx < 0)
-            selected_anwser_idx = mails[selected_mail_idx].anwsers_count - 1;
-    }
-    if (IsKeyPressed(KEY_RIGHT)) {
-        selected_anwser_idx = (selected_anwser_idx + 1) % mails[selected_mail_idx].anwsers_count;
+        if (p->selected_mail_idx > 0) {
+            p->selected_mail_idx--;
+        }
+        p->anwser_ptr = 0;
     }
 
-    (void)args;
+    mail *m = &mails[p->selected_mail_idx];
+    if (m->expected_anwser && !m->password_found) {
+        int key = 0;
+        while ((key = GetCharPressed())) {
+            if (p->anwser_ptr < MAIL_PROCESS_ANWSER_MAX_LENGTH) {
+                p->anwser[p->anwser_ptr] = key;
+                p->anwser_ptr++;
+            }
+        }
+        if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
+            if (p->anwser_ptr > 0) {
+                p->anwser_ptr--;
+            }
+        }
+
+        if (IsKeyPressed(KEY_ENTER)) {
+            if (strlen(m->expected_anwser) == p->anwser_ptr &&
+                strncmp(m->expected_anwser, p->anwser, p->anwser_ptr) == 0) {
+                m->password_found = true;
+            }
+        }
+    }
     return 0;
 }
 
 void mail_render(terminal *term, void *args) {
+    (void)term;
+    mail_process *p = (mail_process *)args;
+
     // Layout
-    const int split_position = WIDTH * 0.35;
+    const int split_position = WIDTH * 0.30;
     DrawRectangle(split_position, 0, 15, HEIGHT, WHITE);
     DrawRectangle(split_position, HEIGHT * 0.25, WIDTH, 8, WHITE);
 
     // Mailbox
-    for (int i = 0; i < mail_count; i++) {
-        const mail *m = &mails[mail_count - i - 1];
-        if (i == selected_mail_idx) {
+    for (size_t i = 0; i < mail_count; i++) {
+        const mail *m = &mails[i];
+        if (i == p->selected_mail_idx) {
             DrawRectangle(0, 60 + 60 * i, split_position, 60, WHITE);
         } else {
             DrawRectangle(0, 120 + 60 * i, split_position, 8, WHITE);
         }
         DrawTextEx(terminal_font, m->short_subject, (Vector2){60, 80 + 60 * i}, font_size, 1,
-                   i == selected_mail_idx ? BLACK : WHITE);
+                   i == p->selected_mail_idx ? BLACK : WHITE);
     }
 
-    mail *m = &mails[selected_mail_idx];
+    mail *m = &mails[p->selected_mail_idx];
     // Mail header
     const int mail_header_font_size = 26;
     DrawTextEx(terminal_font, TextFormat("From: %s", m->from), (Vector2){split_position + 20, 80},
@@ -1262,24 +1361,19 @@ void mail_render(terminal *term, void *args) {
         DrawTextEx(terminal_font, m->content[i], (Vector2){split_position + 20, 200 + 40 * i}, font_size, 1, WHITE);
     }
 
-    // Anwsers
-    int width = (WIDTH - split_position - 75) / m->anwsers_count;
-    for (int i = 0; i < m->anwsers_count; i++) {
-        int x = split_position + 25 + width * i;
-        const char *txt = m->anwsers[i];
-        int middle = (width - MeasureTextEx(terminal_font, txt, 36, 1).x) / 2;
-        Color txt_color = i == selected_anwser_idx ? BLACK : WHITE;
-
-        if (i == selected_anwser_idx) {
-            DrawRectangle(x, HEIGHT - 100, width, 50, WHITE);
+    // Anwser
+    if (m->expected_anwser != NULL) {
+        if (!m->password_found) {
+            Rectangle rec = {split_position + 50, HEIGHT - 125, (WIDTH - split_position - 125), 75};
+            DrawRectangleLinesEx(rec, 8, WHITE);
+            DrawTextEx(terminal_font, TextFormat("%.*s", p->anwser_ptr, p->anwser), (Vector2){rec.x + 16, rec.y + 24},
+                       font_size, 1, WHITE);
         } else {
-            DrawRectangleLinesEx((Rectangle){x, HEIGHT - 100, width, 50}, 3, WHITE);
+            Rectangle rec = {split_position + 50, HEIGHT - 125, (WIDTH - split_position - 125), 75};
+            DrawRectangleRec(rec, WHITE);
+            DrawTextEx(terminal_font, m->expected_anwser, (Vector2){rec.x + 16, rec.y + 24}, font_size, 1, BLACK);
         }
-        DrawTextEx(terminal_font, txt, (Vector2){x + middle, HEIGHT - 90}, 36, 1, txt_color);
     }
-
-    (void)term;
-    (void)args;
 }
 
 int list_init(terminal *term, int argc, const char **argv) {
@@ -1298,7 +1392,8 @@ int list_init(terminal *term, int argc, const char **argv) {
     terminal_append_log(term, "-----------------------------------");
 
     if (root->folder == false) {
-        const char *str = TextFormat("f    %-16s %-4d bytes", root->name, strlen(root->content));
+        // TODO: Suffixed size
+        const char *str = TextFormat("f    %-16s %-4d bytes", root->name, root->content_size);
         terminal_append_log(term, str);
         return 0;
     }
@@ -1309,7 +1404,8 @@ int list_init(terminal *term, int argc, const char **argv) {
             const char *str = TextFormat("d    %-16s %-4d children", node->name, node->children_count);
             terminal_append_log(term, str);
         } else {
-            const char *str = TextFormat("f    %-16s %-4d bytes", node->name, strlen(node->content));
+            // TODO: Suffixed size
+            const char *str = TextFormat("f    %-16s %-4d bytes", node->name, node->content_size);
             terminal_append_log(term, str);
         }
     }
@@ -1352,8 +1448,8 @@ int print_init(terminal *term, int argc, const char **argv) {
     }
     file_node *node = look_up_node(term->fs.pwd, argv[1]);
     if (node && node->folder == false) {
-        if (node->content != NULL) {
-            const char *line = node->content;
+        for (int i = 0; i < node->lines.count; i++) {
+            const char *line = node->lines.items[i];
             while (true) {
                 int line_length = TextFindIndex(line, "\n");
                 if (line_length == -1) {
@@ -1406,7 +1502,7 @@ int create_init(terminal *term, int argc, const char **argv) {
     if (strcmp(argv[1], "d") == 0) {
         file_node_append_children(term->fs.pwd, folder_new(argv[2]));
     } else if (strcmp(argv[1], "f") == 0) {
-        file_node_append_children(term->fs.pwd, file_new(argv[2], ""));
+        file_node_append_children(term->fs.pwd, file_new(argv[2], (text_lines){0}));
     } else {
         terminal_append_log(term, "create (d|f) <path>");
         return 1;
@@ -1432,6 +1528,7 @@ int connect_init(terminal *term, int argc, const char **argv) {
     }
     if (found && other) {
         active_term = other;
+        active_term->connected = true;
         terminal_append_log(term, TextFormat("Machine %s online", ip));
     } else {
         terminal_append_log(term, TextFormat("Machine %s offline", ip));
@@ -1439,17 +1536,69 @@ int connect_init(terminal *term, int argc, const char **argv) {
     return 0;
 }
 
+// TODO: Fix this hack
+bool first_frame_enter = true;
+
+int machines_init(terminal *term, int argc, const char **argv) {
+    (void)term;
+    (void)argc;
+    (void)argv;
+    machines_process *p = malloc(sizeof(*p));
+    p->selected_index = 0;
+    p->machines.items = NULL;
+    p->machines.count = 0;
+    p->machines.capacity = 0;
+    assert(p != NULL);
+    for (int i = 0; i < terminal_count; i++) {
+        if (all_terminals[i].connected) {
+            append(&p->machines, &all_terminals[i]);
+            if (&all_terminals[i] == active_term) {
+                p->selected_index = i;
+            }
+        }
+    }
+    term->args = p;
+    first_frame_enter = true;
+    return 0;
+}
+
+int machines_update(terminal *term, void *args) {
+    (void)term;
+    machines_process *p = (machines_process *)args;
+    if (IsKeyPressed(KEY_ENTER) && !first_frame_enter) {
+        active_term = p->machines.items[p->selected_index];
+        free(p->machines.items);
+        return 1;
+    }
+    if (IsKeyPressed(KEY_DOWN)) {
+        p->selected_index = fmin(p->selected_index + 1, p->machines.count - 1);
+    }
+    if (IsKeyPressed(KEY_UP)) {
+        p->selected_index = fmax(p->selected_index - 1, 0);
+    }
+    term->title = "Switch to another connected machine";
+    first_frame_enter = false;
+    return 0;
+}
+
+void machines_render(terminal *term, void *args) {
+    (void)term;
+    machines_process *p = (machines_process *)args;
+    for (int i = 0; i < p->machines.count; i++) {
+        terminal *t = p->machines.items[i];
+        const char *text = TextFormat("%s%s@%s", t == active_term ? "> " : "", t->hostname, t->ip);
+        if (i == p->selected_index) {
+            DrawHoveredTerminalLine(text, i);
+        } else {
+            DrawTerminalLine(text, i);
+        }
+    }
+}
+
 int hostname_init(terminal *term, int argc, const char **argv) {
     (void)argc;
     (void)argv;
     terminal_append_log(term, term->hostname);
-    return 0;
-}
-
-int mail_init(terminal *term, int argc, const char **argv) {
-    (void)term;
-    (void)argc;
-    (void)argv;
     return 0;
 }
 
@@ -1499,7 +1648,8 @@ int help_init(terminal *term, int argc, const char **argv) {
         const char *asked_command = argv[1];
         default_selected = get_command_id(asked_command);
         if (default_selected == -1) {
-            terminal_append_log(term, TextFormat("Unknown command : %s", asked_command));
+            terminal_append_log(term, TextFormat("Unknown command : %s.", asked_command));
+            terminal_append_log(active_term, "Type 'help' to see available commands");
             return 1;
         }
     }
@@ -1538,7 +1688,7 @@ void help_render(terminal *term, void *args) {
     const help_process *p = (help_process *)args;
 
     // Layout
-    const int split_position = WIDTH * 0.35;
+    const int split_position = WIDTH * 0.30;
     DrawRectangle(split_position, 60, 15, HEIGHT, WHITE);
 
     // Doc render
@@ -1588,6 +1738,7 @@ bool terminal_handle_command(const char *cmd) {
         return true;
     }
     terminal_append_log(active_term, TextFormat("Unknown command : %s", argv[0]));
+    terminal_append_log(active_term, "Type 'help' to see available commands");
     return false;
 }
 
@@ -1673,33 +1824,6 @@ bool TextEmpty(const char *s) {
     return true;
 }
 
-typedef struct {
-    char **items;
-    int count;
-    int capacity;
-} text_lines;
-
-text_lines text_split(char *content, char sep) {
-    text_lines result = {0};
-
-    if (content == NULL) {
-        return result;
-    }
-
-    char *s = content;
-    append(&result, s);
-    while (*s) {
-        if (*s == sep) {
-            *s = '\0';
-            s++;
-            append(&result, s);
-        } else {
-            s++;
-        }
-    }
-    return result;
-}
-
 void load_machines() {
     char *file_content = LoadFileText("assets/machines");
     text_lines lines = text_split(file_content, '\n');
@@ -1732,8 +1856,8 @@ void load_machines() {
                     file_node_append_folder_full_path(all_terminals[machine_idx].fs.root, file);
                 } else {
                     char *content_with_new_lines = TextReplace(content, "\\n", "\n");
-                    file_node_append_file_full_path(all_terminals[machine_idx].fs.root, file, content_with_new_lines);
-                    free(content_with_new_lines);
+                    text_lines file_lines = text_split(strdup(content_with_new_lines), '\n');
+                    file_node_append_file_full_path(all_terminals[machine_idx].fs.root, file, file_lines);
                 }
             }
             continue;
@@ -1776,64 +1900,8 @@ void load_machines() {
     free(file_content);
 }
 
-typedef struct {
-    const char *content;
-    int waiting_time;
-    bool override_previous;
-    void (*callback)(void);
-} bootup_sequence_line;
-
-bootup_sequence_line bootup_sequence[] = {
-    {"NyxLoader Boot Loader v1.4", 500, false, &bootseq_beep},
-    {"Loading Kernel", 500, false, NULL},
-    {"Loading Kernel .", 500, true, NULL},
-    {"Loading Kernel ..", 1000, true, NULL},
-    {"Loading Kernel ...", 500, true, NULL},
-    {"Loading Kernel ... OK", 200, true, NULL},
-    {"Passing control to kernel", 200, false, NULL},
-    {"", 600, false, NULL},
-    {"HemeraKernel v2.4.1", 100, false, NULL},
-    {"Copyright (c) 1987 HemeraLabs", 100, false, NULL},
-    {"", 600, false, NULL},
-    {"CPU: h512X3 @ 66MHz", 100, false, NULL},
-    {"Memory: 12MB detected", 100, false, NULL},
-    {"", 600, false, NULL},
-    {"Probing system components", 1000, false, NULL},
-    {"Probing system components .", 1000, true, NULL},
-    {"Probing system components ..", 1000, true, NULL},
-    {"Probing system components ...", 1000, true, NULL},
-    {"ART bus detected", 100, false, NULL},
-    {"PRC bus detected", 100, false, NULL},
-    {"", 600, false, NULL},
-    {"Mounting root filesystem .", 300, false, NULL},
-    {"Mounting root filesystem ..", 300, true, NULL},
-    {"Mounting root filesystem ...", 300, true, NULL},
-    {"Root mounted from AO0 at /", 300, false, NULL},
-    {"", 600, false, NULL},
-    {"Bringing up network interfaces .", 300, false, NULL},
-    {"Bringing up network interfaces ..", 300, true, NULL},
-    {"Bringing up network interfaces ...", 300, true, NULL},
-    {"Available network interfaces:", 300, false, NULL},
-    {"lo0: loopback configured", 300, false, NULL},
-    {"eth0: address 00:40:12:3A:9F:2C", 300, false, NULL},
-    {"", 600, false, NULL},
-    {"Getting IP address for eth0", 1000, false, NULL},
-    {"eth0: 192.168.1.96", 300, false, NULL},
-    {"", 600, false, NULL},
-    {"Network ready.", 300, false, NULL},
-    {"Starting up user environment .", 300, false, NULL},
-    {"Starting up user environment ..", 300, true, NULL},
-    {"Starting up user environment ...", 300, true, NULL},
-    {"Starting up user environment ... OK", 300, true, NULL},
-    {"", 600, false, NULL},
-    {"Welcome to HemeraOS v1.0.2 (Ciros)", 4000, false, NULL},
-};
-const int bootup_sequence_count = sizeof(bootup_sequence) / sizeof(bootup_sequence[0]);
-
 int bootup_sequence_idx = -1;
 float bootup_sequence_line_time_left = 1000;
-
-#define DISABLE_BOOTUP_SEQUENCE 1
 
 int bootup_sequence_update(terminal *term, void *args) {
 #if DISABLE_BOOTUP_SEQUENCE
@@ -1842,27 +1910,15 @@ int bootup_sequence_update(terminal *term, void *args) {
     (void)args;
     term->title = NULL;
     bootup_sequence_line_time_left -= GetFrameTime() * 1000;
-    if (1) {
-        if (bootup_sequence_line_time_left < 0) {
-            bootup_sequence_idx++;
-            if (bootup_sequence_idx == bootup_sequence_count) {
-                return 1;
-            }
-            bootup_sequence_line_time_left = bootup_sequence[bootup_sequence_idx].waiting_time;
-            if (bootup_sequence[bootup_sequence_idx].callback) {
-                bootup_sequence[bootup_sequence_idx].callback();
-            }
+    if (bootup_sequence_line_time_left < 0) {
+        bootup_sequence_idx++;
+        bootup_sequence_line *line = bootseq_get_line(bootup_sequence_idx);
+        if (line == NULL) {
+            return 1;
         }
-    } else {
-        if (IsKeyPressed(KEY_N)) {
-            bootup_sequence_idx++;
-            if (bootup_sequence_idx == bootup_sequence_count) {
-                return 1;
-            }
-            bootup_sequence_line_time_left = bootup_sequence[bootup_sequence_idx].waiting_time;
-            if (bootup_sequence[bootup_sequence_idx].callback) {
-                bootup_sequence[bootup_sequence_idx].callback();
-            }
+        bootup_sequence_line_time_left = line->waiting_time;
+        if (line->callback) {
+            line->callback();
         }
     }
     return 0;
@@ -1874,7 +1930,8 @@ void bootup_sequence_render(terminal *term, void *args) {
 
     int real_line_count = 0;
     for (int i = 0; i <= bootup_sequence_idx; i++) {
-        if (bootup_sequence[i].override_previous == false) {
+        bootup_sequence_line *line = bootseq_get_line(i);
+        if (line->override_previous == false) {
             real_line_count++;
         }
     }
@@ -1885,7 +1942,8 @@ void bootup_sequence_render(terminal *term, void *args) {
     int real_start = 0;
     int current_line = 0;
     for (int i = 0; i < bootup_sequence_idx; i++) {
-        if (bootup_sequence[i].override_previous == false) {
+        bootup_sequence_line *seq_line = bootseq_get_line(i);
+        if (seq_line->override_previous == false) {
             current_line++;
         }
         if (current_line == start_line) {
@@ -1895,18 +1953,19 @@ void bootup_sequence_render(terminal *term, void *args) {
     }
 
     for (int i = real_start; i <= bootup_sequence_idx; i++) {
-        if (bootup_sequence[i].override_previous == false) {
+        bootup_sequence_line *seq_line = bootseq_get_line(i);
+        if (seq_line->override_previous == false) {
             line++;
         }
-        DrawTerminalLine(bootup_sequence[i].content, line - 1);
+        DrawTerminalLine(seq_line->content, line - 1);
     }
 
     if (bootup_sequence_idx >= 0) {
+        bootup_sequence_line *seq_line = bootseq_get_line(bootup_sequence_idx);
         if ((int)GetTime() % 2 == 0) {
-            int x_offset = bootup_sequence[bootup_sequence_idx].content[0] == '\0' ? 60 : 68;
-            int x =
-                x_offset + MeasureTextEx(terminal_font, bootup_sequence[bootup_sequence_idx].content, font_size, 1).x;
-            int y = 40 + font_size * line;
+            int x_offset = seq_line->content[0] == '\0' ? 60 : 68;
+            int x = x_offset + MeasureTextEx(terminal_font, seq_line->content, font_size, 1).x;
+            int y = 80 + 35 * (line - 1);
             DrawRectangle(x, y, 10, font_size, WHITE);
         }
     }
@@ -1917,6 +1976,7 @@ int main() {
     InitWindow(WIDTH, HEIGHT, "TUIGame");
     InitAudioDevice();
     SetTargetFPS(60);
+    SetExitKey(0);
 
     terminal_shader = LoadShader(0, "shaders/pixeliser.fs");
     target = LoadRenderTexture(WIDTH, HEIGHT);
@@ -1934,7 +1994,9 @@ int main() {
     active_term = &all_terminals[0];
     active_term->process_update = bootup_sequence_update;
     active_term->process_render = bootup_sequence_render;
+    active_term->connected = true;
     bootseq_init();
+    terminal_append_log(active_term, "You have (1) unread mail.");
 
     while (!WindowShouldClose()) {
         if (active_term->process_update == NULL) {

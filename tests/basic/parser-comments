@@ -1,0 +1,5 @@
+OK
+---
+
+#PRINTN("Should not be printed")
+PRINT("OK");

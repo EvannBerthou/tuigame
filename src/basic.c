@@ -1,14 +1,12 @@
 /*
  * TODO:
- *   - Array
  *   - Table like in Lua
- *   - Function return statement
- *   - Function return value
+ *      - Array should just be a table with int key
  *   - Import another file
- *   - TUIGame system call
- *   - Lots of tests cases
- *   - Comments
  *   - More math functions
+ *   - Replace int with fixed sized uint16_t for values
+ *   - Allow fixed point floating numbers
+ *   - Use arena everywhere !!!
  * Bugs:
  *   - Semicolons should be no-op but can cause crashes
  */
@@ -143,6 +141,14 @@ void destroy_interpreter() {
 token next(const char *input) {
     while (isspace(*input))
         input++;
+    if (*input == '#') {
+        while (*input && *input != '\n') {
+            input++;
+        }
+        if (*input) {
+            input++;
+        }
+    }
     token result = {0};
     result.start = input;
 

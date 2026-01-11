@@ -3,7 +3,7 @@ import os, sys
 
 root = 'assets/machines_impl'
 
-machines = os.listdir(root)
+machines = sorted(os.listdir(root))
 
 result = []
 result.append(len(machines))
