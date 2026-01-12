@@ -24,6 +24,11 @@ Shader terminal_shader = {0};
 RenderTexture2D target = {0};
 Font terminal_font = {0};
 
+const int font_size = 28;
+terminal *all_terminals = NULL;
+terminal *active_term = NULL;
+int terminal_count = 0;
+
 #define MAIL_PROCESS_ANWSER_MAX_LENGTH 23
 
 typedef struct {
@@ -31,12 +36,6 @@ typedef struct {
     char anwser[MAIL_PROCESS_ANWSER_MAX_LENGTH];
     size_t anwser_ptr;
 } mail_process;
-
-typedef struct {
-    const char *ip;
-    float remaining_time;
-    int remaning_count;
-} ping_process;
 
 #define NETSCAN_SCAN_TIME (1.f / 60.f)
 
@@ -73,7 +72,7 @@ typedef struct {
 } machines_process;
 
 #define MAX_INPUT_LENGTH 40
-#define MAX_LINE_COUNT_PER_SCREEN 16
+#define MAX_LINE_COUNT_PER_SCREEN 21
 
 typedef struct {
     char **items;
@@ -132,9 +131,11 @@ struct file_node {
     bool folder;
     text_lines lines;
     size_t content_size;
-    file_node **children;
-    int children_capacity;
-    int children_count;
+    struct {
+        file_node **items;
+        int capacity;
+        int count;
+    } children;
 };
 
 const char *node_get_content(file_node *node) {
@@ -156,40 +157,24 @@ void file_node_append_children(file_node *root, file_node *children) {
     if (root->folder == false) {
         return;
     }
-    if (root->children_count == root->children_capacity) {
-        root->children_capacity = root->children_capacity == 0 ? 8 : root->children_capacity * 2;
-        root->children = realloc(root->children, sizeof(file_node *) * root->children_capacity);
-    }
     children->parent = root;
-    root->children[root->children_count] = children;
-    root->children_count++;
+    append(&root->children, children);
 }
 
 file_node *file_new(const char *name, text_lines lines) {
-    file_node *result = malloc(sizeof(file_node));
+    file_node *result = calloc(1, sizeof(*result));
     assert(result != NULL);
-    result->parent = NULL;
     result->name = strdup(name);
     result->lines = lines;
     result->content_size = get_lines_total_size(&result->lines);
-    result->folder = false;
-    result->children = NULL;
-    result->children_count = 0;
-    result->children_capacity = 0;
     return result;
 }
 
 file_node *folder_new(const char *name) {
-    file_node *result = malloc(sizeof(file_node));
+    file_node *result = calloc(1, sizeof(*result));
     assert(result != NULL);
-    result->parent = NULL;
     result->name = strdup(name);
-    result->lines = (text_lines){0};
-    result->content_size = 0;
     result->folder = true;
-    result->children = NULL;
-    result->children_count = 0;
-    result->children_capacity = 0;
     return result;
 }
 
@@ -209,9 +194,9 @@ file_node *find_node_in_dir(file_node *root, const char *filename) {
         return root;
     }
 
-    for (int i = 0; i < root->children_count; i++) {
-        if (strcmp(filename, root->children[i]->name) == 0) {
-            return root->children[i];
+    for (int i = 0; i < root->children.count; i++) {
+        if (strcmp(filename, root->children.items[i]->name) == 0) {
+            return root->children.items[i];
         }
     }
 
@@ -342,8 +327,8 @@ typedef struct {
 } filesystem;
 
 typedef int (*process_init)(terminal *term, int argc, const char **argv);
-typedef int (*process_update)(terminal *term, void *args);
-typedef void (*process_render)(terminal *term, void *args);
+typedef int (*process_update)(terminal *term);
+typedef void (*process_render)(terminal *term);
 
 struct terminal {
     const char *title;
@@ -351,34 +336,35 @@ struct terminal {
     const char *ip;
 
     // TODO: Make it a circular buffer to avoid huge memory usage
-    // TODO: Enable scrolling
-    const char **logs;
-    int log_capacity;
-    int log_count;
+    struct {
+        const char **items;
+        int count;
+        int capacity;
+    } logs;
 
     // TODO: Cursor mouvements
     char input[MAX_INPUT_LENGTH + 1];
     int input_cursor;
 
-    const char **history;
-    int history_capacity;
-    int history_count;
+    struct {
+        const char **items;
+        int count;
+        int capacity;
+    } history;
     int history_ptr;
 
-    int offset;
+    // TODO: Enable scrolling
+    int scroll_offset;
+
     process_update process_update;
     process_render process_render;
     void *args;
     bool render_not_ready;
+    bool process_should_exit;
 
     filesystem fs;
     bool connected;
 };
-
-const int font_size = 28;
-terminal *all_terminals = NULL;
-terminal *active_term = NULL;
-int terminal_count = 0;
 
 typedef struct {
     const char *name;
@@ -414,15 +400,14 @@ typedef struct {
     XI(ping, NULL)       \
     XIUR(edit, NULL)     \
     XIUR(help, NULL)     \
-    XIUR(test, NULL)     \
     XIUR(exec, NULL)     \
     XIU(netscan, "ns")
 
 #define XI(n, a) int n##_init(terminal *term, int argc, const char **argv);
 #define XIU(n, a)                                              \
     int n##_init(terminal *term, int argc, const char **argv); \
-    int n##_update(terminal *term, void *args);
-#define XIUR(n, a) XIU(n, a) void n##_render(terminal *term, void *args);
+    int n##_update(terminal *term);
+#define XIUR(n, a) XIU(n, a) void n##_render(terminal *term);
 COMMANDS
 #undef XI
 #undef XIU
@@ -451,7 +436,7 @@ command_help_pair commands_help[] = {COMMANDS};
 #undef XIU
 #undef XIUR
 
-const size_t command_count = sizeof(commands) / sizeof(commands[0]);
+const size_t command_count = sizeof(commands) / sizeof(*commands);
 
 const char *get_command_help(const char *cmd) {
     for (size_t i = 0; i < command_count; i++) {
@@ -476,6 +461,7 @@ int get_command_id(const char *cmd) {
 
 #define NETWORK_MAX_NODE_COUNT 8
 
+// TODO; Maybe use dynarray ?
 typedef struct {
     struct {
         const char *ip;
@@ -588,27 +574,31 @@ bool ip_is_reachable(const terminal *from, const char *ip) {
     return false;
 }
 
+// (x,y) in screen coordintates
+Vector2 S(int x, int y) {
+    return (Vector2){x + 60, y + 80};
+}
+
+Vector2 V(int x, int y) {
+    return (Vector2){x, y};
+}
+
 void DrawTerminalLine(const char *text, int line) {
-    DrawTextEx(terminal_font, text, (Vector2){60, 80 + 35 * line}, font_size, 1, WHITE);
+    DrawTextEx(terminal_font, text, S(0, font_size * line), font_size, 1, WHITE);
 }
 
 void DrawHoveredTerminalLine(const char *text, int line) {
-    DrawRectangle(0, 75 + 35 * line, WIDTH, font_size + 5, WHITE);
-    DrawTextEx(terminal_font, text, (Vector2){60, 80 + 35 * line}, font_size, 1, BLACK);
+    DrawRectangleV(S(0, -5 + font_size * line), V(WIDTH, font_size + 5), WHITE);
+    DrawTextEx(terminal_font, text, S(0, font_size * line), font_size, 1, BLACK);
 }
 
 void terminal_append_log(terminal *term, const char *text) {
-    if (term->log_count == term->log_capacity) {
-        term->log_capacity = term->log_capacity == 0 ? 8 : term->log_capacity * 2;
-        term->logs = realloc(term->logs, sizeof(*term->logs) * term->log_capacity);
-    }
-    term->logs[term->log_count] = strdup(text);
-    term->log_count++;
-    term->offset = fmax(term->log_count - MAX_LINE_COUNT_PER_SCREEN, 0);
+    append(&term->logs, strdup(text));
+    term->scroll_offset = fmax(term->logs.count - MAX_LINE_COUNT_PER_SCREEN, 0);
 }
 
 void terminal_log_append_text(terminal *term, const char *text) {
-    const char *last_line = term->logs[term->log_count - 1];
+    const char *last_line = term->logs.items[term->logs.count - 1];
     int current_len = strlen(last_line);
     int new_text_len = strlen(text);
     int new_len = current_len + new_text_len + 1;
@@ -618,20 +608,20 @@ void terminal_log_append_text(terminal *term, const char *text) {
     strncpy(new_line, last_line, current_len);
     strncat(new_line, text, new_text_len);
     free((void *)last_line);
-    term->logs[term->log_count - 1] = new_line;
+    term->logs.items[term->logs.count - 1] = new_line;
 }
 
 void terminal_replace_last_line(terminal *term, const char *text) {
-    if (term->log_count == 0) {
+    if (term->logs.count == 0) {
         terminal_append_log(term, text);
         return;
     }
 
-    char *last_line = (char *)term->logs[term->log_count - 1];
+    char *last_line = (char *)term->logs.items[term->logs.count - 1];
     size_t last_line_len = strlen(last_line) + 1;
     size_t new_len = strlen(text) + 1;
     if (last_line_len < new_len) {
-        term->logs[term->log_count - 1] = realloc(last_line, new_len);
+        term->logs.items[term->logs.count - 1] = realloc(last_line, new_len);
     }
     strncpy(last_line, text, last_line_len);
 }
@@ -652,31 +642,38 @@ void terminal_append_print(const char *text) {
 
 void terminal_append_input(terminal *term) {
     terminal_append_log(term, TextFormat("$%.*s", term->input_cursor, term->input));
-    if (term->history_count == term->history_capacity) {
-        term->history_capacity = term->history_capacity == 0 ? 8 : term->history_capacity * 2;
-        term->history = realloc(term->history, sizeof(*term->history) * term->history_capacity);
-    }
-    term->history[term->history_count] = strdup(TextFormat("%.*s", term->input_cursor, term->input));
-    term->history_count++;
+    append(&term->history, strdup(TextFormat("%.*s", term->input_cursor, term->input)));
     term->input_cursor = 0;
 }
 
 void terminal_render(const terminal *term) {
-    for (int i = term->offset; i < term->log_count; i++) {
-        DrawTerminalLine(term->logs[i], i - term->offset);
+    for (int i = term->scroll_offset; i < term->logs.count; i++) {
+        DrawTerminalLine(term->logs.items[i], i - term->scroll_offset);
     }
 }
 
 void terminal_render_prompt(terminal *term) {
-    int last_line_index = fmin(MAX_LINE_COUNT_PER_SCREEN, term->log_count);
+    int last_line_index = fmin(MAX_LINE_COUNT_PER_SCREEN, term->logs.count);
     const char *prompt_text = TextFormat("$%.*s", term->input_cursor, term->input);
     DrawTerminalLine(prompt_text, last_line_index);
     // TODO: Blink qu'après 1 seconde d'inactivité
     if ((int)GetTime() % 2 == 0) {
-        int x = 60 + MeasureTextEx(terminal_font, prompt_text, font_size, 1).x + 8;
-        int y = 80 + 35 * last_line_index + 4;
-        DrawRectangle(x, y, 10, font_size - 8, WHITE);
+        int x = MeasureTextEx(terminal_font, prompt_text, font_size, 1).x + 8;
+        int y = font_size * last_line_index + 4;
+        DrawRectangleV(S(x, y), V(10, font_size - 8), WHITE);
     }
+}
+
+bool first_frame_enter = false;
+
+bool key_pressed(int key) {
+    if (key == KEY_ENTER && first_frame_enter)
+        return false;
+    return IsKeyPressed(key) || IsKeyPressedRepeat(key);
+}
+
+bool key_pressed_control(int key) {
+    return IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(key);
 }
 
 typedef struct edit_line edit_line;
@@ -713,9 +710,6 @@ int next_power_of_two(int x) {
     x++;
     return x;
 }
-
-// TODO: Hack because KEY_ENTER is true on first frame and inserts a new line
-int edit_first_frame = true;
 
 edit_line *edit_create_line(const char *content) {
     edit_line *line = malloc(sizeof(*line));
@@ -758,8 +752,6 @@ int edit_init(terminal *term, int argc, const char **argv) {
     p->tooltip_info = NULL;
     p->tooltip_info_remaining_time = 0;
     term->args = p;
-
-    edit_first_frame = true;
 
     p->root = edit_create_line(node->lines.items[0]);
     edit_line *last = p->root;
@@ -874,8 +866,8 @@ void edit_insert_new_line(edit_process *p) {
     }
 }
 
-int edit_update(terminal *term, void *args) {
-    edit_process *p = (edit_process *)args;
+int edit_update(terminal *term) {
+    edit_process *p = (edit_process *)term->args;
     term->title = TextFormat("Edit : %s", p->node->name);
 
     if (p->tooltip_info_remaining_time > 0) {
@@ -886,7 +878,7 @@ int edit_update(terminal *term, void *args) {
         }
     }
 
-    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_A)) {
+    if (term->process_should_exit) {
         edit_line *line = p->root;
         while (line) {
             free(line->content);
@@ -896,10 +888,10 @@ int edit_update(terminal *term, void *args) {
         }
         return 1;
     }
-    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_S)) {
+    if (key_pressed_control(KEY_S)) {
         edit_save_file(p);
     }
-    if (IsKeyPressed(KEY_RIGHT) || IsKeyPressedRepeat(KEY_RIGHT)) {
+    if (key_pressed(KEY_RIGHT)) {
         if (p->cursor_col == p->selected_line->length) {
             if (p->selected_line->next) {
                 p->selected_line = p->selected_line->next;
@@ -913,7 +905,7 @@ int edit_update(terminal *term, void *args) {
             p->cursor_col = fmin(p->cursor_col + 1, p->selected_line->length);
         }
     }
-    if (IsKeyPressed(KEY_LEFT) || IsKeyPressedRepeat(KEY_LEFT)) {
+    if (key_pressed(KEY_LEFT)) {
         if (p->cursor_col == 0) {
             if (p->selected_line->prev) {
                 if (p->selected_line == p->first_line) {
@@ -927,7 +919,7 @@ int edit_update(terminal *term, void *args) {
             p->cursor_col = fmax(p->cursor_col - 1, 0);
         }
     }
-    if (IsKeyPressed(KEY_DOWN) || IsKeyPressedRepeat(KEY_DOWN)) {
+    if (key_pressed(KEY_DOWN)) {
         if (p->selected_line->next) {
             p->selected_line = p->selected_line->next;
             int line_index = edit_line_offset_prev(p->first_line, p->selected_line);
@@ -936,7 +928,7 @@ int edit_update(terminal *term, void *args) {
             }
         }
     }
-    if (IsKeyPressed(KEY_UP) || IsKeyPressedRepeat(KEY_UP)) {
+    if (key_pressed(KEY_UP)) {
         if (p->selected_line->prev) {
             if (p->selected_line == p->first_line) {
                 p->first_line = p->first_line->prev;
@@ -944,10 +936,10 @@ int edit_update(terminal *term, void *args) {
             p->selected_line = p->selected_line->prev;
         }
     }
-    if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
+    if (key_pressed(KEY_BACKSPACE)) {
         edit_remove_char_at_cursor(p);
     }
-    if (IsKeyPressed(KEY_DELETE) || IsKeyPressedRepeat(KEY_DELETE)) {
+    if (key_pressed(KEY_DELETE)) {
         int col = fmin(p->cursor_col, p->selected_line->length);
         if (col == p->selected_line->length) {
             if (p->selected_line->next) {
@@ -960,7 +952,7 @@ int edit_update(terminal *term, void *args) {
             edit_remove_char_at_cursor(p);
         }
     }
-    if (edit_first_frame == false && IsKeyPressed(KEY_ENTER)) {
+    if (key_pressed(KEY_ENTER)) {
         edit_insert_new_line(p);
     }
 
@@ -968,49 +960,43 @@ int edit_update(terminal *term, void *args) {
     while ((key = GetCharPressed()) != 0) {
         edit_insert_char_at_cursor(p, key);
     }
-    edit_first_frame = false;
     return 0;
 }
 
-void edit_render(terminal *term, void *args) {
-    (void)term;
-    edit_process *p = (edit_process *)args;
+void edit_render(terminal *term) {
+    edit_process *p = (edit_process *)term->args;
 
     edit_line *line = p->first_line;
     int i = 0;
     int cursor_row = 0;
-    while (line && i <= 20) {
-        DrawTextEx(terminal_font, line->content, (Vector2){60, 68 + 28 * i}, 28, 1, WHITE);
+    while (line && i <= MAX_LINE_COUNT_PER_SCREEN - 1) {
+        DrawTextEx(terminal_font, line->content, S(0, font_size * i), font_size, 1, WHITE);
         line = line->next;
         i++;
         if (line == p->selected_line) {
             cursor_row = i;
         }
     }
-    cursor_row = fmin(cursor_row, 20);
+    cursor_row = fmin(cursor_row, MAX_LINE_COUNT_PER_SCREEN - 1);
     const char *current_line_content = p->selected_line->content;
     int col = fmin(p->selected_line->length, p->cursor_col);
-    Vector2 cursor_pos = {60, 68};
-    cursor_pos.x += MeasureTextEx(terminal_font, TextFormat("%.*s", col, current_line_content), 28, 1).x;
-    cursor_pos.y += cursor_row * 28;
-    DrawRectangleV(cursor_pos, (Vector2){font_size, 28}, WHITE);
-    DrawTextEx(terminal_font, TextFormat("%c", current_line_content[col]), cursor_pos, 28, 1, BLACK);
+    Vector2 cursor_pos = S(MeasureTextEx(terminal_font, TextFormat("%.*s", col, current_line_content), font_size, 1).x,
+                           cursor_row * font_size);
+    DrawRectangleV(cursor_pos, V(font_size, font_size), WHITE);
+    DrawTextEx(terminal_font, TextFormat("%c", current_line_content[col]), cursor_pos, font_size, 1, BLACK);
 
     // Tooltip
-    Vector2 tooltip_position = {60, 68 + 28 * 21};
-    DrawTextEx(terminal_font, "[C-s] Save [C-q] Quit", tooltip_position, 28, 1, WHITE);
+    Vector2 tooltip_position = S(0, font_size * MAX_LINE_COUNT_PER_SCREEN);
+    DrawTextEx(terminal_font, "[C-s] Save [C-c] Exit", tooltip_position, font_size, 1, WHITE);
 
     if (p->tooltip_info) {
-        int tooltip_info_length = MeasureTextEx(terminal_font, p->tooltip_info, 28, 1).x;
-        Vector2 tooltip_info_position = {WIDTH - 60 - tooltip_info_length, 68 + 28 * 21};
-        DrawTextEx(terminal_font, p->tooltip_info, tooltip_info_position, 28, 1, WHITE);
+        int tooltip_info_length = MeasureTextEx(terminal_font, p->tooltip_info, font_size, 1).x;
+        Vector2 tooltip_info_position = S(WIDTH - 60 - tooltip_info_length, font_size * MAX_LINE_COUNT_PER_SCREEN);
+        DrawTextEx(terminal_font, p->tooltip_info, tooltip_info_position, font_size, 1, WHITE);
     }
 }
 
 int netscan_init(terminal *term, int argc, const char **argv) {
-    (void)term;
-    (void)argc;
-    (void)argv;
     if (argc != 2) {
         terminal_append_log(term, "netscan <network>");
         return 1;
@@ -1031,9 +1017,9 @@ int netscan_init(terminal *term, int argc, const char **argv) {
     return 0;
 }
 
-int netscan_update(terminal *term, void *args) {
-    netscan_process *p = (netscan_process *)args;
-    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_C)) {
+int netscan_update(terminal *term) {
+    netscan_process *p = (netscan_process *)term->args;
+    if (term->process_should_exit) {
         free((void *)p->scanning_network_ip);
         return 1;
     }
@@ -1059,44 +1045,10 @@ int netscan_update(terminal *term, void *args) {
     return 0;
 }
 
-int test_init(terminal *term, int argc, const char **argv) {
-    (void)argc;
-    (void)argv;
-    test_process *p = malloc(sizeof(*p));
-    assert(p != NULL);
-    term->args = p;
-    return 0;
-}
-
-static void put_pixel(int *fb, int x, int y, int color) {
+void put_pixel(int *fb, int x, int y, int color) {
     if (x < 0 || x >= FB_SIZE_WIDTH || y < 0 || y >= FB_SIZE_HEIGHT)
         return;
     fb[y * FB_SIZE_WIDTH + x] = color;
-}
-
-static void draw_line(int *fb, int x0, int y0, int x1, int y1, int color) {
-    int dx = abs(x1 - x0);
-    int dy = abs(y1 - y0);
-    int sx = (x0 < x1) ? 1 : -1;
-    int sy = (y0 < y1) ? 1 : -1;
-    int err = dx - dy;
-
-    while (1) {
-        put_pixel(fb, x0, y0, color);
-
-        if (x0 == x1 && y0 == y1)
-            break;
-
-        int e2 = 2 * err;
-        if (e2 > -dy) {
-            err -= dy;
-            x0 += sx;
-        }
-        if (e2 < dx) {
-            err += dx;
-            y0 += sy;
-        }
-    }
 }
 
 typedef enum { TERM_BG, TERM_FG, TERM_BLUE, TERM_GREEN, TERM_RED, TERM_YELLOW, TERM_PURPLE, TERM_COUNT } term_color;
@@ -1116,50 +1068,6 @@ void render_framebuffer(int *fb) {
         }
     }
 }
-
-int test_update(terminal *term, void *args) {
-    test_process *p = (test_process *)args;
-    term->title = NULL;
-    memset(p->fb, 0, sizeof(*p->fb) * FB_SIZE);
-
-    float x_min = -10.0f;
-    float x_max = 10.0f;
-
-    float x_scale = (float)FB_SIZE_WIDTH / (x_max - x_min);
-    float y_scale = (float)FB_SIZE_HEIGHT / 2.0f;
-
-    // Pas d’échantillonnage fin
-    const float dx = 0.01f;
-
-    int prev_x = 0;
-    int prev_y = 0;
-    int first = 1;
-
-    for (float x = x_min; x <= x_max; x += dx) {
-        float y = sinf(x / 5 + GetTime());
-
-        int px = (int)((x - x_min) * x_scale);
-        int py = (int)(FB_SIZE_HEIGHT / 2.f - y * y_scale);
-
-        if (!first)
-            draw_line(p->fb, prev_x, prev_y, px, py, TERM_RED);
-        else
-            first = 0;
-
-        prev_x = px;
-        prev_y = py;
-    }
-
-    return 0;
-}
-
-void test_render(terminal *term, void *args) {
-    (void)term;
-    test_process *p = (test_process *)args;
-    render_framebuffer(p->fb);
-}
-
-static void put_pixel(int *fb, int x, int y, int color);
 
 void put_pixel_fn() {
     exec_process *p = (exec_process *)active_term->args;
@@ -1203,8 +1111,10 @@ int exec_init(terminal *t, int argc, const char **argv) {
     p->fb_idx = 0;
     memset(p->fb[0], 0, sizeof(*p->fb[0]) * FB_SIZE);
     memset(p->fb[1], 0, sizeof(*p->fb[1]) * FB_SIZE);
-    // TODO: Merge all lines into one
     const char *program = node_get_content(file);
+    // TODO: Avoid additional new line at the end of execution
+    terminal_append_log(active_term, "");
+
     init_interpreter(&p->interpreter, program);
     register_function("PUTPIXEL", put_pixel_fn, 3);
     register_function("RENDER", flip_render_fn, 0);
@@ -1224,9 +1134,9 @@ int exec_init(terminal *t, int argc, const char **argv) {
     return 0;
 }
 
-int exec_update(terminal *t, void *args) {
-    exec_process *p = (exec_process *)args;
-    if (IsKeyPressed(KEY_C) && IsKeyDown(KEY_LEFT_CONTROL)) {
+int exec_update(terminal *term) {
+    exec_process *p = (exec_process *)term->args;
+    if (term->process_should_exit) {
         destroy_interpreter();
         free((void *)p->filename);
         return 1;
@@ -1238,13 +1148,12 @@ int exec_update(terminal *t, void *args) {
             return 1;
         }
     }
-    t->title = TextFormat("Executing %s", p->filename);
+    term->title = TextFormat("Executing %s", p->filename);
     return 0;
 }
 
-void exec_render(terminal *t, void *args) {
-    (void)t;
-    exec_process *p = (exec_process *)args;
+void exec_render(terminal *term) {
+    exec_process *p = (exec_process *)term->args;
     render_framebuffer(p->fb[p->fb_idx]);
 }
 
@@ -1271,7 +1180,6 @@ mail mails[] = {
 const int mail_count = sizeof(mails) / sizeof(*mails);
 
 int mail_init(terminal *term, int argc, const char **argv) {
-    (void)term;
     (void)argc;
     (void)argv;
     mail_process *p = malloc(sizeof(*p));
@@ -1282,17 +1190,17 @@ int mail_init(terminal *term, int argc, const char **argv) {
     return 0;
 }
 
-int mail_update(terminal *term, void *args) {
-    mail_process *p = (mail_process *)args;
+int mail_update(terminal *term) {
+    mail_process *p = (mail_process *)term->args;
     term->title = "Mails";
-    if (IsKeyPressed(KEY_A)) {
+    if (term->process_should_exit) {
         return 1;
     }
-    if (IsKeyPressed(KEY_DOWN)) {
+    if (key_pressed(KEY_DOWN)) {
         p->selected_mail_idx = fmin(mail_count - 1, p->selected_mail_idx + 1);
         p->anwser_ptr = 0;
     }
-    if (IsKeyPressed(KEY_UP)) {
+    if (key_pressed(KEY_UP)) {
         if (p->selected_mail_idx > 0) {
             p->selected_mail_idx--;
         }
@@ -1308,13 +1216,13 @@ int mail_update(terminal *term, void *args) {
                 p->anwser_ptr++;
             }
         }
-        if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
+        if (key_pressed(KEY_BACKSPACE)) {
             if (p->anwser_ptr > 0) {
                 p->anwser_ptr--;
             }
         }
 
-        if (IsKeyPressed(KEY_ENTER)) {
+        if (key_pressed(KEY_ENTER)) {
             if (strlen(m->expected_anwser) == p->anwser_ptr &&
                 strncmp(m->expected_anwser, p->anwser, p->anwser_ptr) == 0) {
                 m->password_found = true;
@@ -1324,9 +1232,8 @@ int mail_update(terminal *term, void *args) {
     return 0;
 }
 
-void mail_render(terminal *term, void *args) {
-    (void)term;
-    mail_process *p = (mail_process *)args;
+void mail_render(terminal *term) {
+    mail_process *p = (mail_process *)term->args;
 
     // Layout
     const int split_position = WIDTH * 0.30;
@@ -1398,10 +1305,10 @@ int list_init(terminal *term, int argc, const char **argv) {
         return 0;
     }
 
-    for (int i = 0; i < root->children_count; i++) {
-        file_node *node = root->children[i];
+    for (int i = 0; i < root->children.count; i++) {
+        file_node *node = root->children.items[i];
         if (node->folder) {
-            const char *str = TextFormat("d    %-16s %-4d children", node->name, node->children_count);
+            const char *str = TextFormat("d    %-16s %-4d children", node->name, node->children.count);
             terminal_append_log(term, str);
         } else {
             // TODO: Suffixed size
@@ -1536,11 +1443,7 @@ int connect_init(terminal *term, int argc, const char **argv) {
     return 0;
 }
 
-// TODO: Fix this hack
-bool first_frame_enter = true;
-
 int machines_init(terminal *term, int argc, const char **argv) {
-    (void)term;
     (void)argc;
     (void)argv;
     machines_process *p = malloc(sizeof(*p));
@@ -1562,18 +1465,22 @@ int machines_init(terminal *term, int argc, const char **argv) {
     return 0;
 }
 
-int machines_update(terminal *term, void *args) {
-    (void)term;
-    machines_process *p = (machines_process *)args;
-    if (IsKeyPressed(KEY_ENTER) && !first_frame_enter) {
+int machines_update(terminal *term) {
+    machines_process *p = (machines_process *)term->args;
+    if (term->process_should_exit) {
+        free(p->machines.items);
+        return 1;
+    }
+
+    if (key_pressed(KEY_ENTER)) {
         active_term = p->machines.items[p->selected_index];
         free(p->machines.items);
         return 1;
     }
-    if (IsKeyPressed(KEY_DOWN)) {
+    if (key_pressed(KEY_DOWN)) {
         p->selected_index = fmin(p->selected_index + 1, p->machines.count - 1);
     }
-    if (IsKeyPressed(KEY_UP)) {
+    if (key_pressed(KEY_UP)) {
         p->selected_index = fmax(p->selected_index - 1, 0);
     }
     term->title = "Switch to another connected machine";
@@ -1581,9 +1488,8 @@ int machines_update(terminal *term, void *args) {
     return 0;
 }
 
-void machines_render(terminal *term, void *args) {
-    (void)term;
-    machines_process *p = (machines_process *)args;
+void machines_render(terminal *term) {
+    machines_process *p = (machines_process *)term->args;
     for (int i = 0; i < p->machines.count; i++) {
         terminal *t = p->machines.items[i];
         const char *text = TextFormat("%s%s@%s", t == active_term ? "> " : "", t->hostname, t->ip);
@@ -1612,10 +1518,10 @@ int shutdown_init(terminal *term, int argc, const char **argv) {
 int clear_init(terminal *term, int argc, const char **argv) {
     (void)argc;
     (void)argv;
-    for (int i = 0; i < term->log_count; i++) {
-        free((void *)term->logs[i]);
+    for (int i = 0; i < term->logs.count; i++) {
+        free((void *)term->logs.items[i]);
     }
-    term->log_count = 0;
+    term->logs.count = 0;
     return 0;
 }
 
@@ -1662,19 +1568,19 @@ int help_init(terminal *term, int argc, const char **argv) {
     return 0;
 }
 
-int help_update(terminal *term, void *args) {
-    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_A)) {
+int help_update(terminal *term) {
+    help_process *p = (help_process *)term->args;
+    if (term->process_should_exit) {
         return 1;
     }
-    help_process *p = (help_process *)args;
     term->title = TextFormat("Help : %s", commands[p->selected_index].name);
-    if (IsKeyPressed(KEY_DOWN) || IsKeyPressedRepeat(KEY_DOWN)) {
+    if (key_pressed(KEY_DOWN)) {
         p->selected_index = fmin(p->selected_index + 1, command_count - 1);
         if (p->selected_index - p->offset >= 10) {
             p->offset = fmin(p->offset + 1, command_count - 10);
         }
     }
-    if (IsKeyPressed(KEY_UP) || IsKeyPressedRepeat(KEY_UP)) {
+    if (key_pressed(KEY_UP)) {
         p->selected_index = fmax(p->selected_index - 1, 0);
         if (p->selected_index == p->offset - 1) {
             p->offset = fmax(p->offset - 1, 0);
@@ -1683,9 +1589,8 @@ int help_update(terminal *term, void *args) {
     return 0;
 }
 
-void help_render(terminal *term, void *args) {
-    (void)term;
-    const help_process *p = (help_process *)args;
+void help_render(terminal *term) {
+    const help_process *p = (help_process *)term->args;
 
     // Layout
     const int split_position = WIDTH * 0.30;
@@ -1772,8 +1677,8 @@ const char *terminal_autocomplete_file(file_node *root, const char *path) {
     const char *input_filename = get_path_filename(path);
     size_t path_length = strlen(input_filename);
     const char *completed_file_path = NULL;
-    for (int i = 0; i < node->children_count; i++) {
-        const char *file_name = node->children[i]->name;
+    for (int i = 0; i < node->children.count; i++) {
+        const char *file_name = node->children.items[i]->name;
         if (path_length <= strlen(file_name)) {
             if (strncmp(input_filename, file_name, path_length) == 0) {
                 completed_file_path = file_name + path_length;
@@ -1784,6 +1689,7 @@ const char *terminal_autocomplete_file(file_node *root, const char *path) {
     return completed_file_path;
 }
 
+// TODO: Cycle
 void terminal_autocomplete_input(terminal *term) {
     if (term->input_cursor == 0) {
         return;
@@ -1903,11 +1809,10 @@ void load_machines() {
 int bootup_sequence_idx = -1;
 float bootup_sequence_line_time_left = 1000;
 
-int bootup_sequence_update(terminal *term, void *args) {
+int bootup_sequence_update(terminal *term) {
 #if DISABLE_BOOTUP_SEQUENCE
     return 1;
 #endif
-    (void)args;
     term->title = NULL;
     bootup_sequence_line_time_left -= GetFrameTime() * 1000;
     if (bootup_sequence_line_time_left < 0) {
@@ -1924,9 +1829,8 @@ int bootup_sequence_update(terminal *term, void *args) {
     return 0;
 }
 
-void bootup_sequence_render(terminal *term, void *args) {
+void bootup_sequence_render(terminal *term) {
     (void)term;
-    (void)args;
 
     int real_line_count = 0;
     for (int i = 0; i <= bootup_sequence_idx; i++) {
@@ -1963,10 +1867,10 @@ void bootup_sequence_render(terminal *term, void *args) {
     if (bootup_sequence_idx >= 0) {
         bootup_sequence_line *seq_line = bootseq_get_line(bootup_sequence_idx);
         if ((int)GetTime() % 2 == 0) {
-            int x_offset = seq_line->content[0] == '\0' ? 60 : 68;
+            int x_offset = seq_line->content[0] == '\0' ? 0 : 8;
             int x = x_offset + MeasureTextEx(terminal_font, seq_line->content, font_size, 1).x;
-            int y = 80 + 35 * (line - 1);
-            DrawRectangle(x, y, 10, font_size, WHITE);
+            int y = font_size * (line - 1);
+            DrawRectangleV(S(x, y), V(10, font_size), WHITE);
         }
     }
 }
@@ -1999,6 +1903,7 @@ int main() {
     terminal_append_log(active_term, "You have (1) unread mail.");
 
     while (!WindowShouldClose()) {
+        first_frame_enter = false;
         if (active_term->process_update == NULL) {
             int key = 0;
             if (IsKeyDown(KEY_LEFT_CONTROL) == false) {
@@ -2009,45 +1914,49 @@ int main() {
                     }
                 }
             }
-            if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && active_term->input_cursor > 0) {
+            if (key_pressed(KEY_BACKSPACE) && active_term->input_cursor > 0) {
                 active_term->input_cursor--;
             }
-            if (IsKeyPressed(KEY_ENTER)) {
+            if (key_pressed(KEY_ENTER)) {
+                first_frame_enter = true;
                 terminal_exec_input(active_term);
             }
-            if (IsKeyPressed(KEY_UP)) {
-                int offset = active_term->history_count - active_term->history_ptr - 1;
+            if (key_pressed(KEY_UP)) {
+                int offset = active_term->history.count - active_term->history_ptr - 1;
                 if (offset >= 0) {
-                    strncpy(active_term->input, active_term->history[offset], MAX_INPUT_LENGTH);
+                    strncpy(active_term->input, active_term->history.items[offset], MAX_INPUT_LENGTH);
                     active_term->input_cursor = strlen(active_term->input);
                     active_term->history_ptr++;
                 }
             }
-            if (IsKeyPressed(KEY_DOWN)) {
+            if (key_pressed(KEY_DOWN)) {
                 if (active_term->history_ptr > 1) {
                     active_term->history_ptr--;
-                    int offset = active_term->history_count - active_term->history_ptr;
-                    strncpy(active_term->input, active_term->history[offset], MAX_INPUT_LENGTH);
+                    int offset = active_term->history.count - active_term->history_ptr;
+                    strncpy(active_term->input, active_term->history.items[offset], MAX_INPUT_LENGTH);
                     active_term->input_cursor = strlen(active_term->input);
                 } else {
                     active_term->history_ptr = 0;
                     active_term->input_cursor = 0;
                 }
             }
-            if (IsKeyPressed(KEY_TAB)) {
+            if (key_pressed(KEY_TAB)) {
                 terminal_autocomplete_input(active_term);
             }
-            if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_L)) {
+            if (key_pressed_control(KEY_L)) {
                 clear_init(active_term, 0, NULL);
             }
         }
 
         if (active_term->process_update != NULL) {
-            if (active_term->process_update(active_term, active_term->args)) {
+            active_term->process_should_exit = key_pressed_control(KEY_C);
+            if (active_term->process_update(active_term)) {
                 active_term->process_update = NULL;
                 active_term->process_render = NULL;
+                active_term->render_not_ready = false;
                 free(active_term->args);
                 active_term->args = NULL;
+                active_term->process_should_exit = false;
             }
         } else {
             active_term->title = TextFormat("%s : %s", active_term->hostname, active_term->ip);
@@ -2065,7 +1974,7 @@ int main() {
             }
 
             if (active_term->process_render != NULL && !active_term->render_not_ready) {
-                active_term->process_render(active_term, active_term->args);
+                active_term->process_render(active_term);
             } else {
                 terminal_render(active_term);
             }
