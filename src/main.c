@@ -340,6 +340,7 @@ struct terminal {
         int count;
         int capacity;
     } logs;
+    int scroll_offset;
 
     // TODO: Cursor mouvements
     char input[MAX_INPUT_LENGTH + 1];
@@ -351,9 +352,6 @@ struct terminal {
         int capacity;
     } history;
     int history_ptr;
-
-    // TODO: Enable scrolling
-    int scroll_offset;
 
     process_update process_update;
     process_render process_render;
@@ -376,7 +374,6 @@ typedef struct {
 // TODO: Command ideas:
 //   iv -> Image viewer
 //   rm/mv -> file manipulation
-//   script ? -> Scripting language
 
 // TODO: Command improvements
 //   ls -> Add date
@@ -646,7 +643,8 @@ void terminal_append_input(terminal *term) {
 }
 
 void terminal_render(const terminal *term) {
-    for (int i = term->scroll_offset; i < term->logs.count; i++) {
+    int count = fmin(term->scroll_offset + MAX_LINE_COUNT_PER_SCREEN, term->logs.count);
+    for (int i = term->scroll_offset; i < count; i++) {
         DrawTerminalLine(term->logs.items[i], i - term->scroll_offset);
     }
 }
@@ -672,7 +670,7 @@ bool key_pressed(int key) {
 }
 
 bool key_pressed_control(int key) {
-    return IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(key);
+    return IsKeyDown(KEY_LEFT_CONTROL) && key_pressed(key);
 }
 
 typedef struct edit_line edit_line;
@@ -1167,7 +1165,6 @@ typedef struct {
     bool password_found;
 } mail;
 
-// TODO: Load mail from external source
 mail mails[] = {
     {.short_subject = "Intruder",
      .full_subject = "Unauthorized access attempt",
@@ -1669,7 +1666,6 @@ const char *terminal_autocomplete_command(const char *input) {
     return completed_command;
 }
 
-// TODO: Cycling on TAB
 const char *terminal_autocomplete_file(file_node *root, const char *path) {
     file_node *node = get_parent_from_path(root, path);
     if (node == NULL) {
@@ -1922,15 +1918,23 @@ int main() {
                 first_frame_enter = true;
                 terminal_exec_input(active_term);
             }
-            if (key_pressed(KEY_UP)) {
+            if (key_pressed_control(KEY_UP)) {
+                if (active_term->scroll_offset > 0) {
+                    active_term->scroll_offset--;
+                }
+            } else if (key_pressed(KEY_UP)) {
                 int offset = active_term->history.count - active_term->history_ptr - 1;
                 if (offset >= 0) {
                     strncpy(active_term->input, active_term->history.items[offset], MAX_INPUT_LENGTH);
                     active_term->input_cursor = strlen(active_term->input);
                     active_term->history_ptr++;
                 }
+                active_term->scroll_offset = fmax(0, active_term->logs.count - MAX_LINE_COUNT_PER_SCREEN);
             }
-            if (key_pressed(KEY_DOWN)) {
+            if (key_pressed_control(KEY_DOWN)) {
+                active_term->scroll_offset =
+                    fmin(active_term->scroll_offset + 1, fmax(0, active_term->logs.count - MAX_LINE_COUNT_PER_SCREEN));
+            } else if (key_pressed(KEY_DOWN)) {
                 if (active_term->history_ptr > 1) {
                     active_term->history_ptr--;
                     int offset = active_term->history.count - active_term->history_ptr;
@@ -1940,6 +1944,7 @@ int main() {
                     active_term->history_ptr = 0;
                     active_term->input_cursor = 0;
                 }
+                active_term->scroll_offset = fmax(0, active_term->logs.count - MAX_LINE_COUNT_PER_SCREEN);
             }
             if (key_pressed(KEY_TAB)) {
                 terminal_autocomplete_input(active_term);
@@ -1980,7 +1985,9 @@ int main() {
                 terminal_render(active_term);
             }
             if (active_term->process_update == NULL) {
-                terminal_render_prompt(active_term);
+                if (active_term->scroll_offset == fmax(0, active_term->logs.count - MAX_LINE_COUNT_PER_SCREEN)) {
+                    terminal_render_prompt(active_term);
+                }
             }
         }
         EndTextureMode();
