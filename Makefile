@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=#-Wall -Wextra -Werror -Warray-bounds -Wno-initializer-overrides -std=c23 -pedantic
+CFLAGS=-Wall -Wextra -Werror -Warray-bounds -Wno-initializer-overrides -std=c23 -pedantic
 
 all: build/main_game
 
@@ -18,21 +18,21 @@ run: build/main_game
 	./build/main_game
 
 clean:
-	-rm -rf build
+	rm -rf build
 
 analysis:
 	cppcheck --std=c23 --suppress=missingIncludeSystem --suppress=staticFunction --check-level=exhaustive src/main.c src/basic.c src/arena.c src/bootseq.c
 
-basic-build: src/basic.c
+build/basic: src/basic.c
 	$(CC) $(CFLAGS) -I./include src/basic.c src/arena.c -o build/basic -ggdb -DBASIC_TEST -lm
 
-test: basic-build
+test: build/basic
 	python tools/basic-test.py
 
-debug: basic-build
+debug: build/basic
 	gf2 ./build/basic
 
-basic: basic-build
+basic: build/basic
 	./build/basic
 
-.PHONY: all run clean machines_builder build_docs analysis
+.PHONY: all run clean machines_builder build_docs analysis test debug basic

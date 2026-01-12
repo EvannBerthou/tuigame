@@ -15,11 +15,6 @@
         (l)->items[(l)->count++] = (x);                                            \
     } while (0)
 
-// if ((l)->capacity > DYNARRAY_CAPACITY_LIMIT) {                             \
-//     fprintf(stderr, "Too much allocation\n");                              \
-//     exit(1);                                                               \
-// }
-
 #define pop(l) (l)->items[--(l)->count]
 
 typedef struct {

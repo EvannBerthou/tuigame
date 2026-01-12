@@ -57,7 +57,6 @@ typedef struct {
 
 typedef struct {
     const char *filename;
-    basic_interpreter interpreter;
     int fb[2][FB_SIZE];
     int fb_idx;
 } exec_process;
@@ -1107,7 +1106,6 @@ int exec_init(terminal *t, int argc, const char **argv) {
     exec_process *p = malloc(sizeof(*p));
     assert(p != NULL);
     p->filename = strdup(filepath);
-    p->interpreter = (basic_interpreter){.print_fn = terminal_basic_print, .append_print_fn = terminal_append_print};
     p->fb_idx = 0;
     memset(p->fb[0], 0, sizeof(*p->fb[0]) * FB_SIZE);
     memset(p->fb[1], 0, sizeof(*p->fb[1]) * FB_SIZE);
@@ -1115,7 +1113,9 @@ int exec_init(terminal *t, int argc, const char **argv) {
     // TODO: Avoid additional new line at the end of execution
     terminal_append_log(active_term, "");
 
-    init_interpreter(&p->interpreter, program);
+    if (!interpreter_init(program, &terminal_basic_print, &terminal_append_print)) {
+        return 1;
+    }
     register_function("PUTPIXEL", put_pixel_fn, 3);
     register_function("RENDER", flip_render_fn, 0);
     register_function("COLOR_RED", flip_render_fn, 0);
@@ -1141,9 +1141,9 @@ int exec_update(terminal *term) {
         free((void *)p->filename);
         return 1;
     }
-    advance_interpreter_time(&p->interpreter, GetFrameTime());
+    advance_interpreter_time(GetFrameTime());
     for (int i = 0; i < 100000; i++) {
-        if (!step_program(&p->interpreter)) {
+        if (!step_program()) {
             free((void *)p->filename);
             return 1;
         }
@@ -1177,7 +1177,7 @@ mail mails[] = {
                  "machine2 and send me the", "intruder's IP address.", "Regards,"},
      .expected_anwser = "82.142.23.204"},
 };
-const int mail_count = sizeof(mails) / sizeof(*mails);
+const size_t mail_count = sizeof(mails) / sizeof(*mails);
 
 int mail_init(terminal *term, int argc, const char **argv) {
     (void)argc;
@@ -1447,6 +1447,7 @@ int machines_init(terminal *term, int argc, const char **argv) {
     (void)argc;
     (void)argv;
     machines_process *p = malloc(sizeof(*p));
+    assert(p != NULL);
     p->selected_index = 0;
     p->machines.items = NULL;
     p->machines.count = 0;

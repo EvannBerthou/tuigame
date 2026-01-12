@@ -22,6 +22,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include "arena.h"
+#include "basic_internals.h"
 
 #define X(x) "TOKEN_" #x,
 const char *token_string[] = {TOKENS};
@@ -56,7 +57,7 @@ bool in_debugger() {
 #define BREAKPOINT()         \
     do {                     \
         if (in_debugger()) { \
-            asm("int3");     \
+            __asm__("int3"); \
         }                    \
     } while (0)
 #else
@@ -130,12 +131,6 @@ keyword_type get_keyword(token tok) {
         }
     }
     return KW_NONE;
-}
-
-void destroy_interpreter() {
-    global_interpreter = NULL;
-    arena_free(interpreter_arena);
-    interpreter_arena = NULL;
 }
 
 token next(const char *input) {
@@ -977,6 +972,9 @@ void restore_previous_frame() {
 
 expr_op *nop_node() {
     expr_op *result = malloc(sizeof(*result));
+    if (result == NULL) {
+        ERR("Could not allocate nop node");
+    }
     result->type = OP_NOP;
     return result;
 }
@@ -1333,7 +1331,7 @@ bool step_expr() {
                         .return_stmt = NULL, .stack_idx = global_interpreter->symbol_count, .is_expr_call = true};
                     append(&global_interpreter->returns, r);
                     do_function_exit();
-                    pop(&global_interpreter->values_stack);
+                    (void)pop(&global_interpreter->values_stack);
                 }
 
                 if (global_interpreter->state != STATE_SLEEPING) {
@@ -1363,31 +1361,6 @@ bool step_expr() {
     return false;
 }
 
-void register_function(const char *name, void (*f)(), int arg_count) {
-    symbol *s = get_symbol_id(create_symbol(name, SYMBOL_FUNCTION_NATIVE));
-    s->as.native_func.function = f;
-    if (arg_count < 0) {
-        s->as.native_func.arg_count = 0;
-        s->as.native_func.variadic_arg_count = true;
-    } else {
-        s->as.native_func.arg_count = arg_count;
-    }
-}
-
-void register_variable_int(const char *name, int value) {
-    symbol *s = get_symbol_id(create_symbol(name, SYMBOL_VARIABLE_INT));
-    s->scope_depth = 0;
-    s->scope = SCOPE_GLOBAL;
-    s->as.integer = value;
-}
-
-void register_variable_string(const char *name, const char *value) {
-    symbol *s = get_symbol_id(create_symbol(name, SYMBOL_VARIABLE_STRING));
-    s->scope_depth = 0;
-    s->scope = SCOPE_GLOBAL;
-    s->as.string = value;
-}
-
 void breakpoint_fn() {
     BREAKPOINT();
 }
@@ -1404,28 +1377,6 @@ void register_std_lib() {
     register_function("MOD", mod_fn, 2);
     // STRINGS
     register_function("LENGTH", length_fn, 1);
-}
-
-void init_interpreter(basic_interpreter *i, const char *src) {
-    global_interpreter = i;
-    interpreter_arena = arena_default();
-    parser_reader = 0;
-    token_count = 0;
-    volatile int error_code = 0;
-    if ((error_code = setjmp(err_jmp)) != 0) {
-        if (error_code != -1) {
-            printf("\nexit from error from line %d\n", error_line);
-        }
-        destroy_interpreter();
-        return;
-    }
-    i->current_expr_plan_idx = 0;
-    i->current_expr_plan.count = 0;
-    register_std_lib();
-    lexical_analysis(src);
-    i->pc = parse_block();
-    expect(TOKEN_EOF);
-    i->state = STATE_RUNNING;
 }
 
 void do_function_exit() {
@@ -1497,11 +1448,11 @@ bool state_expr_evaluation() {
     return true;
 }
 
-bool step_program(basic_interpreter *i) {
+bool internal_step_program() {
     int error_code = 0;
     if ((error_code = setjmp(err_jmp)) != 0) {
         if (error_code != -1) {
-            printf("\nexit from error from line %d\n", error_line);
+            interpreter_log("\nexit from error from line %d\n", error_line);
         }
         destroy_interpreter();
         return false;
@@ -1509,21 +1460,21 @@ bool step_program(basic_interpreter *i) {
 
     if (should_go_to_sleep) {
         should_go_to_sleep = false;
-        i->state = STATE_SLEEPING;
+        global_interpreter->state = STATE_SLEEPING;
     }
 
-    if (i->state == STATE_SLEEPING) {
-        if (i->time_elapsed >= i->wakeup_time) {
-            i->state = STATE_RUNNING;
+    if (global_interpreter->state == STATE_SLEEPING) {
+        if (global_interpreter->time_elapsed >= global_interpreter->wakeup_time) {
+            global_interpreter->state = STATE_RUNNING;
         } else {
             return true;
         }
-    } else if (i->state == STATE_EXPR_EVALUATION) {
+    } else if (global_interpreter->state == STATE_EXPR_EVALUATION) {
         state_expr_evaluation();
         return true;
     }
 
-    stmt *s = i->pc;
+    stmt *s = global_interpreter->pc;
     if (s == NULL) {
         destroy_interpreter();
         return false;
@@ -1583,7 +1534,7 @@ bool step_program(basic_interpreter *i) {
             int max = s->as.stmt_for_end.max;
 
             if (max == min) {
-                i->pc = s->next;
+                global_interpreter->pc = s->next;
             }
 
             symbol *var = get_symbol(variable);
@@ -1598,15 +1549,15 @@ bool step_program(basic_interpreter *i) {
             }
 
             if (var->as.integer == max) {
-                i->pc = s->next;
+                global_interpreter->pc = s->next;
                 global_interpreter->symbol_count = s->as.stmt_for_end.stack_saved;
             } else {
-                i->pc = s->jmp;
+                global_interpreter->pc = s->jmp;
             }
             break;
         }
         case STMT_NOP:
-            i->pc = s->next;
+            global_interpreter->pc = s->next;
             break;
         case STMT_VARIABLE: {
             const char *name = s->as.stmt_variable.variable;
@@ -1634,7 +1585,7 @@ bool step_program(basic_interpreter *i) {
             var->as.funcdecl.body = s->next;
             var->as.funcdecl.args = s->as.stmt_funcdecl.args.items;
             var->as.funcdecl.arg_count = s->as.stmt_funcdecl.args.count;
-            i->pc = s->jmp;
+            global_interpreter->pc = s->jmp;
             break;
         }
         case STMT_FUNCTION_EXIT: {
@@ -1666,31 +1617,11 @@ void default_print(const char *text) {
     printf("%s", text);
 }
 
-void advance_interpreter_time(basic_interpreter *i, float time) {
-    i->time_elapsed += time;
-}
-
 long long timeInMilliseconds(void) {
     struct timeval tv;
 
     gettimeofday(&tv, NULL);
     return (((long long)tv.tv_sec) * 1000) + (tv.tv_usec / 1000);
-}
-
-int basic_pop_value_num() {
-    value v = pop(&global_interpreter->values_stack);
-    if (v.type != VAL_NUM) {
-        ERR("Expected numeric value on top of stack");
-    }
-    return v.as.number;
-}
-
-const char *basic_pop_value_string() {
-    value v = pop(&global_interpreter->values_stack);
-    if (v.type != VAL_STRING) {
-        ERR("Expected string value on top of stack");
-    }
-    return v.as.string;
 }
 
 int value_as_string(value v, char *out) {
@@ -1712,6 +1643,73 @@ int value_as_string(value v, char *out) {
     }
 }
 
+// Externals
+
+bool interpreter_init(const char *src, void (*print_fn)(const char *), void (*append_fn)(const char *)) {
+    interpreter_arena = arena_default();
+    global_interpreter = arena_alloc(interpreter_arena, sizeof(*global_interpreter));
+    memset(global_interpreter, 0, sizeof(*global_interpreter));
+    global_interpreter->print_fn = print_fn == NULL ? default_print : print_fn;
+    global_interpreter->append_print_fn = append_fn == NULL ? default_print : append_fn;
+    parser_reader = 0;
+    token_count = 0;
+    volatile int error_code = 0;
+    if ((error_code = setjmp(err_jmp)) != 0) {
+        if (error_code != -1) {
+            interpreter_log("\nexit from error from line %d\n", error_line);
+        }
+        destroy_interpreter();
+        return false;
+    }
+    global_interpreter->current_expr_plan_idx = 0;
+    global_interpreter->current_expr_plan.count = 0;
+    register_std_lib();
+    lexical_analysis(src);
+    global_interpreter->pc = parse_block();
+    expect(TOKEN_EOF);
+    global_interpreter->state = STATE_RUNNING;
+    return true;
+}
+
+void advance_interpreter_time(float time) {
+    global_interpreter->time_elapsed += time;
+}
+
+bool step_program() {
+    return internal_step_program();
+}
+
+void destroy_interpreter() {
+    global_interpreter = NULL;
+    arena_free(interpreter_arena);
+    interpreter_arena = NULL;
+}
+
+void register_function(const char *name, void (*f)(), int arg_count) {
+    symbol *s = get_symbol_id(create_symbol(name, SYMBOL_FUNCTION_NATIVE));
+    s->as.native_func.function = f;
+    if (arg_count < 0) {
+        s->as.native_func.arg_count = 0;
+        s->as.native_func.variadic_arg_count = true;
+    } else {
+        s->as.native_func.arg_count = arg_count;
+    }
+}
+
+void register_variable_int(const char *name, int value) {
+    symbol *s = get_symbol_id(create_symbol(name, SYMBOL_VARIABLE_INT));
+    s->scope_depth = 0;
+    s->scope = SCOPE_GLOBAL;
+    s->as.integer = value;
+}
+
+void register_variable_string(const char *name, const char *value) {
+    symbol *s = get_symbol_id(create_symbol(name, SYMBOL_VARIABLE_STRING));
+    s->scope_depth = 0;
+    s->scope = SCOPE_GLOBAL;
+    s->as.string = value;
+}
+
 void basic_push_int(int result) {
     value v = {.type = VAL_NUM, .as.number = result};
     append(&global_interpreter->values_stack, v);
@@ -1720,6 +1718,22 @@ void basic_push_int(int result) {
 void basic_push_string(const char *s) {
     value v = {.type = VAL_STRING, .as.string = s};
     append(&global_interpreter->values_stack, v);
+}
+
+int basic_pop_value_num() {
+    value v = pop(&global_interpreter->values_stack);
+    if (v.type != VAL_NUM) {
+        ERR("Expected numeric value on top of stack");
+    }
+    return v.as.number;
+}
+
+const char *basic_pop_value_string() {
+    value v = pop(&global_interpreter->values_stack);
+    if (v.type != VAL_STRING) {
+        ERR("Expected string value on top of stack");
+    }
+    return v.as.string;
 }
 
 void basic_sleep(float seconds) {
@@ -1771,20 +1785,20 @@ int main(int argc, const char **argv) {
     const char default_content[] = {
 #embed "../assets/machines_impl/machine1/files/x"
     };
-    basic_interpreter i = {.print_fn = default_print, .append_print_fn = default_print};
-
     if (argc == 2 && argv[1][0] == '-') {
         const char *content = read_all_stdin();
-        init_interpreter(&i, content);
+        if (!interpreter_init(content, NULL, NULL))
+            return 1;
     } else {
-        init_interpreter(&i, default_content);
+        if (!interpreter_init(default_content, NULL, NULL))
+            return 1;
     }
 
     long long last_time = timeInMilliseconds();
     while (true) {
         long long new_time = timeInMilliseconds();
-        advance_interpreter_time(&i, (new_time - last_time) / 1000.f);
-        if (!step_program(&i))
+        advance_interpreter_time((new_time - last_time) / 1000.f);
+        if (!step_program())
             break;
         last_time = new_time;
     }

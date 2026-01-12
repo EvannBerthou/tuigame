@@ -1,1 +1,5 @@
-PRINTN();
+FUNC OUTER();
+    FUNC INNER();
+        RETURN 0;
+    END
+END
