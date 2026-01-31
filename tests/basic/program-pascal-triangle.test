@@ -13,7 +13,7 @@ END
 
 FOR n IN 0..4;
     FOR k IN 0..n+1;
-        PRINT(COMB(n k) " ");
+        PRINT(COMB(n k));
     END
     PRINTN();
 END

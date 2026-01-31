@@ -35,4 +35,8 @@ debug: build/basic
 basic: build/basic
 	./build/basic
 
+sound:
+	$(CC) $(CFLAGS) src/sound.c -o build/sound -I./include -L ./lib/linux/ -lraylib -lm -ggdb
+	./build/sound
+
 .PHONY: all run clean machines_builder build_docs analysis test debug basic

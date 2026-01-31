@@ -1,4 +1,5 @@
-Nested function declaration are not allowed
+Nested function declaration are not allowed.
+*
 *
 ---
 FUNC OUTER();

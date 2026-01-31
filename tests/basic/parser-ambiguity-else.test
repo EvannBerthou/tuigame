@@ -3,7 +3,7 @@ B
 IF 1;
     IF 0;
         PRINT("A");
-    ELSE;
+    ELSE
         PRINT("B");
     END
 END

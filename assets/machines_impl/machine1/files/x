@@ -1,5 +1,14 @@
-FUNC OUTER();
-    FUNC INNER();
-        RETURN 0;
+FUNC COMB(n k);
+    IF k == 0 OR k == n;
+        RETURN 1;
+    ELSE
+        RETURN COMB(n - 1 k - 1) + COMB(n - 1 k);
     END
+END
+
+FOR n IN 0..4;
+    FOR k IN 0..n+1;
+        PRINT(COMB(n k));
+    END
+    PRINTN();
 END

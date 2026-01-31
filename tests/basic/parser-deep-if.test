@@ -6,15 +6,15 @@ IF 1;
             IF 1;
                 IF 1;
                     PRINT("deep");
-                ELSE;
+                ELSE
                     PRINT("never");
                 END
             END
-        ELSE;
+        ELSE
             PRINT("never");
         END
     END
-ELSE;
+ELSE
     PRINT("never");
 END
 

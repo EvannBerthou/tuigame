@@ -26,7 +26,6 @@ FOR k IN 2..30;
     IF ISPRIME(k);
         IF prev != 0;
             PRINT(prev);
-            PRINT(" ");
             PRINTN(k);
         END
         prev = k;

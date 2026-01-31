@@ -1,0 +1,18 @@
+PREV 3
+PREV 2
+PREV 1
+PREV 0
+AFTER 0
+AFTER 1
+AFTER 2
+AFTER 3
+---
+FUNC COUNTDOWN(n);
+    IF n >= 0;
+        PRINTN("PREV" n);
+        COUNTDOWN(n - 1);
+        PRINTN("AFTER" n);
+    END
+END
+
+COUNTDOWN(3);

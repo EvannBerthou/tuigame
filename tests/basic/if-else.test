@@ -1,7 +1,15 @@
-No
+1
+2
+3
+FIN
 ---
 IF FALSE;
-    PRINTN("Yes");
+    PRINTN("A");
+    PRINTN("B");
+    PRINTN("C");
 ELSE
-    PRINTN("No");
+    PRINTN("1");
+    PRINTN("2");
+    PRINTN("3");
 END
+PRINT("FIN");

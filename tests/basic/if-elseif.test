@@ -1,0 +1,10 @@
+OK
+FIN
+---
+IF FALSE;
+    PRINT("NO");
+ELSE IF TRUE;
+    PRINTN("OK");
+END
+END
+PRINTN("FIN");
