@@ -116,7 +116,7 @@ typedef enum { VAL_NUM, VAL_STRING } value_type;
 typedef struct {
     value_type type;
     union {
-        int number;
+        uint16_t number;
         const char *string;
     } as;
 } value;

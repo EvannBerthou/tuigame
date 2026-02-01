@@ -1,0 +1,5 @@
+FOR j IN 0..1000;
+    FOR k IN 0..1000;
+        PRINTN(j k);
+    END  
+END  

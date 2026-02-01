@@ -13,7 +13,7 @@
 FUNC STEP(n);
     IF MOD(n 2) == 0;
         RETURN n / 2;
-    ELSE;
+    ELSE
         RETURN (n * 3) + 1;
     END
 END
@@ -29,7 +29,6 @@ END
 
 FOR k IN 0..11;
     PRINT(k);
-    PRINT(" ");
     PRINTN(COLLATZ(k));
 END
 

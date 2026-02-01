@@ -18,6 +18,8 @@ const float HEIGHT = 720;
 #define FB_SIZE_HEIGHT 60
 #define FB_SIZE (FB_SIZE_WIDTH * FB_SIZE_HEIGHT)
 
+#define MAX_LOG_COUNT 4096
+
 typedef struct terminal terminal;
 
 Shader terminal_shader = {0};
@@ -141,13 +143,14 @@ const char *node_get_content(file_node *node) {
     if (node->folder) {
         return NULL;
     }
-    char *content = malloc(node->content_size + 1);
+    char *content = malloc(node->content_size + node->lines.count + 1);
     assert(content != NULL);
     content[0] = '\0';
 
     char *s = content;
     for (int i = 0; i < node->lines.count; i++) {
         s = strcat(s, node->lines.items[i]);
+        s = strcat(s, " ");
     }
     return content;
 }
@@ -334,12 +337,11 @@ struct terminal {
     const char *hostname;
     const char *ip;
 
-    // TODO: Make it a circular buffer to avoid huge memory usage
-    struct {
-        const char **items;
-        int count;
-        int capacity;
-    } logs;
+    const char *logs[MAX_LOG_COUNT];
+    size_t log_head;
+    size_t log_tail;
+    size_t log_count;
+
     int scroll_offset;
 
     // TODO: Cursor mouvements
@@ -589,12 +591,26 @@ void DrawHoveredTerminalLine(const char *text, int line) {
 }
 
 void terminal_append_log(terminal *term, const char *text) {
-    append(&term->logs, strdup(text));
-    term->scroll_offset = fmax(term->logs.count - MAX_LINE_COUNT_PER_SCREEN, 0);
+    if (term->log_count == MAX_LOG_COUNT) {
+        size_t oldest = (term->log_head + MAX_LOG_COUNT - term->log_count) % MAX_LOG_COUNT;
+        free((void *)term->logs[oldest]);
+    } else {
+        term->log_count++;
+    }
+
+    term->logs[term->log_head] = strdup(text);
+    term->log_head = (term->log_head + 1) % MAX_LOG_COUNT;
+
+    if (term->log_count >= MAX_LINE_COUNT_PER_SCREEN) {
+        term->scroll_offset = term->log_count - MAX_LINE_COUNT_PER_SCREEN;
+    } else {
+        term->scroll_offset = 0;
+    }
 }
 
 void terminal_log_append_text(terminal *term, const char *text) {
-    const char *last_line = term->logs.items[term->logs.count - 1];
+    size_t last = (term->log_head == 0 ? MAX_LOG_COUNT : term->log_head) - 1;
+    const char *last_line = term->logs[last];
     int current_len = strlen(last_line);
     int new_text_len = strlen(text);
     int new_len = current_len + new_text_len + 1;
@@ -604,26 +620,27 @@ void terminal_log_append_text(terminal *term, const char *text) {
     strncpy(new_line, last_line, current_len);
     strncat(new_line, text, new_text_len);
     free((void *)last_line);
-    term->logs.items[term->logs.count - 1] = new_line;
+    term->logs[last] = new_line;
 }
 
 void terminal_replace_last_line(terminal *term, const char *text) {
-    if (term->logs.count == 0) {
+    if (term->log_count == 0) {
         terminal_append_log(term, text);
         return;
     }
 
-    char *last_line = (char *)term->logs.items[term->logs.count - 1];
+    size_t last = (term->log_head == 0 ? MAX_LOG_COUNT : term->log_head) - 1;
+    char *last_line = (char *)term->logs[last];
     size_t last_line_len = strlen(last_line) + 1;
     size_t new_len = strlen(text) + 1;
     if (last_line_len < new_len) {
-        term->logs.items[term->logs.count - 1] = realloc(last_line, new_len);
+        term->logs[last] = realloc(last_line, new_len);
     }
     strncpy(last_line, text, last_line_len);
 }
 
 void terminal_basic_print(const char *text) {
-    printf("%s", text);
+    // printf("%s", text);
     if (*text == '\n') {
         terminal_append_log(active_term, "");
     } else {
@@ -632,7 +649,7 @@ void terminal_basic_print(const char *text) {
 }
 
 void terminal_append_print(const char *text) {
-    printf("[Basic]: %s", text);
+    // printf("[Basic]: %s", text);
     terminal_log_append_text(active_term, text);
 }
 
@@ -643,14 +660,19 @@ void terminal_append_input(terminal *term) {
 }
 
 void terminal_render(const terminal *term) {
-    int count = fmin(term->scroll_offset + MAX_LINE_COUNT_PER_SCREEN, term->logs.count);
-    for (int i = term->scroll_offset; i < count; i++) {
-        DrawTerminalLine(term->logs.items[i], i - term->scroll_offset);
+    size_t available = term->log_count;
+
+    size_t start = term->scroll_offset;
+    size_t end = fmin(start + MAX_LINE_COUNT_PER_SCREEN, available);
+
+    for (size_t i = start; i < end; i++) {
+        size_t idx = (term->log_head + MAX_LOG_COUNT - term->log_count + i) % MAX_LOG_COUNT;
+        DrawTerminalLine(term->logs[idx], i - term->scroll_offset);
     }
 }
 
 void terminal_render_prompt(terminal *term) {
-    int last_line_index = fmin(MAX_LINE_COUNT_PER_SCREEN, term->logs.count);
+    int last_line_index = fmin(MAX_LINE_COUNT_PER_SCREEN, term->log_count);
     const char *prompt_text = TextFormat("$%.*s", term->input_cursor, term->input);
     DrawTerminalLine(prompt_text, last_line_index);
     // TODO: Blink qu'après 1 seconde d'inactivité
@@ -1090,6 +1112,8 @@ void system_fn() {
     basic_sleep(0.25f);
 }
 
+double exec_start = 0;
+
 int exec_init(terminal *t, int argc, const char **argv) {
     if (argc != 2) {
         terminal_append_log(t, "exec <file>");
@@ -1111,6 +1135,7 @@ int exec_init(terminal *t, int argc, const char **argv) {
     // TODO: Avoid additional new line at the end of execution
     terminal_append_log(active_term, "");
 
+    exec_start = GetTime();
     if (!interpreter_init(program, &terminal_basic_print, &terminal_append_print)) {
         return 1;
     }
@@ -1143,6 +1168,7 @@ int exec_update(terminal *term) {
     for (int i = 0; i < 100000; i++) {
         if (!step_program()) {
             free((void *)p->filename);
+            printf("Execution took %f\n", GetTime() - exec_start);
             return 1;
         }
     }
@@ -1516,10 +1542,15 @@ int shutdown_init(terminal *term, int argc, const char **argv) {
 int clear_init(terminal *term, int argc, const char **argv) {
     (void)argc;
     (void)argv;
-    for (int i = 0; i < term->logs.count; i++) {
-        free((void *)term->logs.items[i]);
+
+    for (size_t i = 0; i < active_term->log_count; i++) {
+        size_t index = (term->log_head + MAX_LOG_COUNT - term->log_count + i) % MAX_LOG_COUNT;
+        free((void *)term->logs[index]);
+        term->logs[index] = NULL;
     }
-    term->logs.count = 0;
+    term->log_head = 0;
+    term->log_tail = 0;
+    term->log_count = 0;
     return 0;
 }
 
@@ -1929,11 +1960,11 @@ int main() {
                     active_term->input_cursor = strlen(active_term->input);
                     active_term->history_ptr++;
                 }
-                active_term->scroll_offset = fmax(0, active_term->logs.count - MAX_LINE_COUNT_PER_SCREEN);
+                active_term->scroll_offset = fmax(0, active_term->log_count - MAX_LINE_COUNT_PER_SCREEN);
             }
             if (key_pressed_control(KEY_DOWN)) {
                 active_term->scroll_offset =
-                    fmin(active_term->scroll_offset + 1, fmax(0, active_term->logs.count - MAX_LINE_COUNT_PER_SCREEN));
+                    fmin(active_term->scroll_offset + 1, fmax(0, active_term->log_count - MAX_LINE_COUNT_PER_SCREEN));
             } else if (key_pressed(KEY_DOWN)) {
                 if (active_term->history_ptr > 1) {
                     active_term->history_ptr--;
@@ -1944,7 +1975,7 @@ int main() {
                     active_term->history_ptr = 0;
                     active_term->input_cursor = 0;
                 }
-                active_term->scroll_offset = fmax(0, active_term->logs.count - MAX_LINE_COUNT_PER_SCREEN);
+                active_term->scroll_offset = fmax(0, active_term->log_count - MAX_LINE_COUNT_PER_SCREEN);
             }
             if (key_pressed(KEY_TAB)) {
                 terminal_autocomplete_input(active_term);
@@ -1985,7 +2016,10 @@ int main() {
                 terminal_render(active_term);
             }
             if (active_term->process_update == NULL) {
-                if (active_term->scroll_offset == fmax(0, active_term->logs.count - MAX_LINE_COUNT_PER_SCREEN)) {
+                bool is_scrolling =
+                    active_term->log_count >= MAX_LINE_COUNT_PER_SCREEN &&
+                    (active_term->scroll_offset != (int)active_term->log_count - MAX_LINE_COUNT_PER_SCREEN);
+                if (!is_scrolling) {
                     terminal_render_prompt(active_term);
                 }
             }
@@ -2007,5 +2041,6 @@ int main() {
         DrawFPS(0, 0);
         EndDrawing();
     }
+    CloseAudioDevice();
     CloseWindow();
 }

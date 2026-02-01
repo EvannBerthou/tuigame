@@ -72,15 +72,18 @@ bool in_debugger() {
         longjmp(err_jmp, 1);                             \
     } while (0)
 
+uint16_t read_word();
 void print_program_bytecode() {
     printf("\n==== Program Bytecode ====\n");
     printf("IP = %zu (%s)\n", global_interpreter->ip, global_interpreter->current_function->name);
+    size_t prev_ip = global_interpreter->ip;
     for (size_t f = 0; f < global_interpreter->bytecode.count; f++) {
         printf("\n== %s ==\n", global_interpreter->bytecode.items[f].name);
         function_code *function = &global_interpreter->bytecode.items[f];
-        for (size_t i = 0; i < function->body.count; i++) {
+        while (global_interpreter->ip < function->body.count) {
+            size_t i = global_interpreter->ip++;
             opcode_type op = function->body.items[i];
-            if (global_interpreter->current_function == function && global_interpreter->ip == i) {
+            if (global_interpreter->current_function == function && prev_ip == i) {
                 printf("-->");
             }
             printf("%04zu ", i);
@@ -90,11 +93,13 @@ void print_program_bytecode() {
                     break;
                 case OPCODE_CONSTANT_STRING:
                     printf("OPCODE_CONSTANT_STRING");
-                    printf("\t\t%s", global_interpreter->values.items[function->body.items[++i]].as.string);
+                    printf("\t\t%s", global_interpreter->values.items[read_word()].as.string);
+                    i += 2;
                     break;
                 case OPCODE_CONSTANT_NUMBER:
                     printf("OPCODE_CONSTANT_NUMBER");
-                    printf("\t\t%d", function->body.items[++i]);
+                    printf("\t\t%d", read_word());
+                    i += 2;
                     break;
                 case OPCODE_EQEQ:
                     printf("OPCODE_EQEQ");
@@ -134,18 +139,21 @@ void print_program_bytecode() {
                     break;
                 case OPCODE_FUNCALL:
                     printf("OPCODE_FUNCALL");
-                    printf("\t\t\t%d", function->body.items[++i]);
+                    printf("\t\t\t%d", read_word());
+                    i += 2;
                     break;
                 case OPCODE_JUMP_IF_FALSE: {
                     printf("OPCODE_JUMP_IF_FALSE");
-                    size_t offset = function->body.items[++i];
-                    printf("\t\t%04zu", i + offset + 1);
+                    uint16_t offset = read_word();
+                    printf("\t\t%05d", (int16_t)(i + offset + 3));
+                    i += 2;
                     break;
                 }
                 case OPCODE_JUMP: {
                     printf("OPCODE_JUMP");
-                    size_t offset = function->body.items[++i];
-                    printf("\t\t\t%04d", (int8_t)(i + offset + 1));
+                    uint16_t offset = read_word();
+                    printf("\t\t\t%05d", (int16_t)(i + offset + 3));
+                    i += 2;
                     break;
                 }
                 case OPCODE_DISCARD:
@@ -161,6 +169,7 @@ void print_program_bytecode() {
             printf("\n");
         }
     }
+    global_interpreter->ip = prev_ip;
 }
 
 #include <stdio.h>
@@ -252,10 +261,8 @@ token next(const char *input) {
             ERR("Mismatching '\"'");
         }
         input++;
-    } else if (isalpha(*input) || *input == '$' || *input == '_') {
+    } else if (isalpha(*input) || *input == '_') {
         result.type = TOKEN_IDENTIFIER;
-        if (*input == '$')
-            input++;
         while (isalnum(*input) || *input == '_')
             input++;
     } else if (isdigit(*input)) {
@@ -434,10 +441,18 @@ size_t emit_opcode(opcode_type type) {
     return prev;
 }
 
-size_t emit_byte(uint8_t byte) {
+size_t emit_word(uint16_t byte) {
     size_t prev = global_interpreter->current_function->body.count;
-    append(&global_interpreter->current_function->body, byte);
+    append(&global_interpreter->current_function->body, byte & 0xFF);
+    append(&global_interpreter->current_function->body, (byte >> 8) & 0xFF);
     return prev;
+}
+
+uint16_t read_word() {
+    uint16_t result = 0;
+    result += global_interpreter->current_function->body.items[global_interpreter->ip++] & 0xFF;
+    result += (global_interpreter->current_function->body.items[global_interpreter->ip++] & 0xFF) << 8;
+    return result;
 }
 
 int emit_value(value v) {
@@ -445,15 +460,15 @@ int emit_value(value v) {
     return global_interpreter->values.count - 1;
 }
 
-void emit_constant_number(uint8_t num) {
+void emit_constant_number(uint16_t num) {
     emit_opcode(OPCODE_CONSTANT_NUMBER);
-    emit_byte(num);
+    emit_word(num);
 }
 
 void emit_constant_string(const char *str) {
     emit_opcode(OPCODE_CONSTANT_STRING);
     int index = emit_value((value){.type = VAL_STRING, .as.string = str});
-    emit_byte(index);
+    emit_word(index);
 }
 
 void emit_variable_value(const char *var) {
@@ -476,7 +491,7 @@ void compile_identifier() {
         expect(TOKEN_RPAREN);
         emit_constant_string(tok_to_str(tok));
         emit_opcode(OPCODE_FUNCALL);
-        emit_byte(arg_count);
+        emit_word(arg_count);
     } else {
         emit_variable_value(tok_to_str(tok));
     }
@@ -576,10 +591,11 @@ void compile_and() {
         parser_next();
 
         emit_opcode(OPCODE_JUMP_IF_FALSE);
-        size_t jmp = emit_byte(0);
+        size_t jmp = emit_word(0);
         compile_and();
-        global_interpreter->current_function->body.items[jmp] =
-            global_interpreter->current_function->body.count - jmp - 1;
+        uint16_t and_jmp_index = global_interpreter->current_function->body.count - jmp - 2;
+        global_interpreter->current_function->body.items[jmp] = and_jmp_index & 0xFF;
+        global_interpreter->current_function->body.items[jmp + 1] = (and_jmp_index >> 8) & 0xFF;
     }
 }
 
@@ -591,21 +607,23 @@ void compile_or() {
 
         // If false
         emit_opcode(OPCODE_JUMP_IF_FALSE);
-        size_t else_jmp = emit_byte(0);
+        size_t else_jmp = emit_word(0);
 
         // If true
         emit_opcode(OPCODE_CONSTANT_NUMBER);
-        emit_byte(1);
+        emit_word(1);
         emit_opcode(OPCODE_JUMP);
-        size_t end_jmp = emit_byte(0);
+        size_t end_jmp = emit_word(0);
 
-        global_interpreter->current_function->body.items[else_jmp] =
-            global_interpreter->current_function->body.count - else_jmp - 1;
+        uint16_t else_jmp_index = global_interpreter->current_function->body.count - else_jmp - 2;
+        global_interpreter->current_function->body.items[else_jmp] = else_jmp_index & 0xFF;
+        global_interpreter->current_function->body.items[else_jmp + 1] = (else_jmp_index >> 8) & 0xFF;
 
         compile_or();
 
-        global_interpreter->current_function->body.items[end_jmp] =
-            global_interpreter->current_function->body.count - end_jmp - 1;
+        uint16_t end_jmp_index = global_interpreter->current_function->body.count - end_jmp - 2;
+        global_interpreter->current_function->body.items[end_jmp] = end_jmp_index & 0xFF;
+        global_interpreter->current_function->body.items[end_jmp + 1] = (end_jmp_index >> 8) & 0xFF;
     }
 }
 
@@ -636,7 +654,7 @@ void compile_statement() {
             expect(TOKEN_SEMICOLON);
             emit_constant_string(tok_to_str(id));
             emit_opcode(OPCODE_FUNCALL);
-            emit_byte(arg_count);
+            emit_word(arg_count);
             emit_opcode(OPCODE_DISCARD);
         } else {
             ERR("Unknown identifier %s", tok_to_str(id));
@@ -653,7 +671,7 @@ void compile_statement() {
         expect(TOKEN_SEMICOLON);
 
         emit_opcode(OPCODE_JUMP_IF_FALSE);
-        emit_byte(0);
+        emit_word(0);
 
         size_t saved = global_interpreter->current_function->body.count;
         compile_block();
@@ -662,14 +680,22 @@ void compile_statement() {
         if (peek_kw(KW_ELSE)) {
             parser_next();
             emit_opcode(OPCODE_JUMP);
-            emit_byte(0);
+            emit_word(0);
             size_t else_saved = global_interpreter->current_function->body.count;
             compile_block();
             size_t else_after = global_interpreter->current_function->body.count;
-            global_interpreter->current_function->body.items[saved - 1] = after - saved + 2;
-            global_interpreter->current_function->body.items[else_saved - 1] = else_after - else_saved;
+
+            uint16_t after_index = after - saved + 3;
+            global_interpreter->current_function->body.items[saved - 2] = after_index & 0xFF;
+            global_interpreter->current_function->body.items[saved - 1] = (after_index >> 8) & 0xFF;
+
+            uint16_t else_saved_index = else_after - else_saved;
+            global_interpreter->current_function->body.items[else_saved - 2] = else_saved_index & 0xFF;
+            global_interpreter->current_function->body.items[else_saved - 1] = (else_saved_index >> 8) & 0xFF;
         } else {
-            global_interpreter->current_function->body.items[saved - 1] = after - saved;
+            uint16_t after_index = after - saved;
+            global_interpreter->current_function->body.items[saved - 2] = after_index & 0xFF;
+            global_interpreter->current_function->body.items[saved - 1] = (after_index >> 8) & 0xFF;
         }
 
         expect_kw(KW_END);
@@ -691,13 +717,12 @@ void compile_statement() {
         emit_variable_value(variable_name);
         emit_opcode(OPCODE_GT);
         emit_opcode(OPCODE_JUMP_IF_FALSE);
-        emit_byte(0);
+        emit_word(0);
         size_t loop_jump = global_interpreter->current_function->body.count;
 
         compile_block();
         expect_kw(KW_END);
 
-        // TODO: Add increment opcode ?
         emit_constant_number(1);
         emit_variable_value(variable_name);
         emit_opcode(OPCODE_ADD);
@@ -707,9 +732,32 @@ void compile_statement() {
         size_t end = global_interpreter->current_function->body.count;
 
         emit_opcode(OPCODE_JUMP);
-        emit_byte(loop_start - end - 2);
+        emit_word(loop_start - end - 3);
 
-        global_interpreter->current_function->body.items[loop_jump - 1] = end - loop_jump + 2;
+        uint16_t jmp_index = end - loop_jump + 3;
+        global_interpreter->current_function->body.items[loop_jump - 2] = jmp_index & 0xFF;
+        global_interpreter->current_function->body.items[loop_jump - 1] = (jmp_index >> 8) & 0xFF;
+    } else if (peek_kw(KW_WHILE)) {
+        parser_next();
+
+        size_t loop_start = global_interpreter->current_function->body.count;
+        compile_expr();
+        expect(TOKEN_SEMICOLON);
+        emit_opcode(OPCODE_JUMP_IF_FALSE);
+        emit_word(0);
+        size_t loop_jump = global_interpreter->current_function->body.count;
+
+        compile_block();
+        expect_kw(KW_END);
+
+        size_t end = global_interpreter->current_function->body.count;
+
+        emit_opcode(OPCODE_JUMP);
+        emit_word(loop_start - end - 3);
+
+        uint16_t jmp_index = end - loop_jump + 3;
+        global_interpreter->current_function->body.items[loop_jump - 2] = jmp_index & 0xFF;
+        global_interpreter->current_function->body.items[loop_jump - 1] = (jmp_index >> 8) & 0xFF;
     } else if (peek_kw(KW_FUNC)) {
         parser_next();
         const char *function_name = tok_to_str(expect(TOKEN_IDENTIFIER));
@@ -946,13 +994,13 @@ bool step_bytecode() {
     opcode_type op = global_interpreter->current_function->body.items[global_interpreter->ip++];
     switch (op) {
         case OPCODE_CONSTANT_STRING: {
-            int index = global_interpreter->current_function->body.items[global_interpreter->ip++];
+            uint16_t index = read_word();
             value value = global_interpreter->values.items[index];
             append(&global_interpreter->stack, value);
             return true;
         } break;
         case OPCODE_CONSTANT_NUMBER: {
-            uint8_t v = global_interpreter->current_function->body.items[global_interpreter->ip++];
+            uint16_t v = read_word();
             value res = {.type = VAL_NUM, .as.number = v};
             append(&global_interpreter->stack, res);
             return true;
@@ -1022,14 +1070,14 @@ bool step_bytecode() {
                 ERR("Unknown symbol %s", function_name);
             }
             if (function->type == SYMBOL_FUNCTION_NATIVE) {
-                uint8_t funcall_arg_count = global_interpreter->current_function->body.items[global_interpreter->ip++];
+                uint16_t funcall_arg_count = read_word();
                 size_t expected = function->as.native_func.arg_count;
                 if (funcall_arg_count != expected && function->as.native_func.variadic_arg_count == false) {
                     ERR("Function %s expected %zu args but recieved %zu", function_name, expected, funcall_arg_count);
                 }
                 function->as.native_func.function();
             } else if (function->type == SYMBOL_FUNCTION) {
-                uint8_t funcall_arg_count = global_interpreter->current_function->body.items[global_interpreter->ip++];
+                uint16_t funcall_arg_count = read_word();
                 size_t expected = function->as.funcdecl.arg_count;
                 if (funcall_arg_count != expected) {
                     ERR("Function %s expected %zu args but recieved %zu", function_name, expected, funcall_arg_count);
@@ -1083,9 +1131,9 @@ bool step_bytecode() {
             break;
         case OPCODE_JUMP_IF_FALSE: {
             value result = pop(&global_interpreter->stack);
-            uint8_t offset = global_interpreter->current_function->body.items[global_interpreter->ip++];
+            uint16_t offset = read_word();
             if (!is_true(result)) {
-                global_interpreter->ip += (int8_t)offset;
+                global_interpreter->ip += (int16_t)offset;
             }
             opcode_type next = global_interpreter->current_function->body.items[global_interpreter->ip];
             if (next == OPCODE_JUMP_IF_FALSE) {
@@ -1094,8 +1142,8 @@ bool step_bytecode() {
             return true;
         } break;
         case OPCODE_JUMP: {
-            uint8_t offset = global_interpreter->current_function->body.items[global_interpreter->ip++];
-            global_interpreter->ip += (int8_t)offset;
+            uint16_t offset = read_word();
+            global_interpreter->ip += (int16_t)offset;
             return true;
         } break;
         case OPCODE_DISCARD: {
@@ -1117,6 +1165,10 @@ bool step_bytecode() {
 }
 
 bool step_program() {
+    if (global_interpreter->state == STATE_SLEEPING) {
+        return true;
+    }
+
     if (global_interpreter->ip >= global_interpreter->current_function->body.count) {
         ERR("Something went wrong with ip");
     }

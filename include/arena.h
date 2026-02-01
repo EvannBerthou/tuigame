@@ -27,6 +27,7 @@ typedef struct {
 
 arena *arena_default();
 void *arena_alloc(arena *a, size_t size);
+void *arena_realloc(arena *a, void *ptr, size_t size);
 void arena_free(arena *a);
 
 #endif
