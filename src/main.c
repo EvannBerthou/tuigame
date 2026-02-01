@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "arena.h"
 #include "basic.h"
 #include "bootseq.h"
@@ -379,7 +380,6 @@ typedef struct {
 
 // TODO: Command improvements
 //   ls -> Add date
-//   edit -> Search
 
 #define COMMANDS         \
     XI(list, "ls")       \
@@ -704,6 +704,8 @@ struct edit_line {
     edit_line *prev;
 };
 
+#define EDIT_MAX_SEARCH_INPUT_LENGTH 16
+
 typedef struct {
     file_node *node;
     int cursor_col;
@@ -714,6 +716,17 @@ typedef struct {
 
     const char *tooltip_info;
     int tooltip_info_remaining_time;
+
+    bool search_open;
+    char search_input[EDIT_MAX_SEARCH_INPUT_LENGTH];
+    size_t search_cursor_position;
+
+    struct {
+        Vector2 *items;
+        size_t count;
+        size_t capacity;
+    } search_result;
+    size_t selected_search_result;
 } edit_process;
 
 int next_power_of_two(int x) {
@@ -766,10 +779,9 @@ int edit_init(terminal *term, int argc, const char **argv) {
     }
     edit_process *p = malloc(sizeof(*p));
     assert(p);
+
+    memset(p, 0, sizeof(*p));
     p->node = node;
-    p->cursor_col = 0;
-    p->tooltip_info = NULL;
-    p->tooltip_info_remaining_time = 0;
     term->args = p;
 
     p->root = edit_create_line(node->lines.items[0]);
@@ -885,6 +897,57 @@ void edit_insert_new_line(edit_process *p) {
     }
 }
 
+edit_line *edit_get_line(edit_process *p, size_t line) {
+    edit_line *root = p->root;
+    while (root != NULL && line > 0) {
+        line--;
+        root = root->next;
+    }
+    if (line != 0) {
+        return p->root;
+    }
+    return root;
+}
+
+void edit_set_selected_search_result(edit_process *p, int selected) {
+    Vector2 position = p->search_result.items[selected];
+    p->selected_search_result = selected;
+    p->selected_line = edit_get_line(p, position.x);
+    p->first_line = p->selected_line;
+    p->cursor_col = position.y;
+}
+
+void edit_set_search(edit_process *p) {
+    if (p->search_cursor_position == 0) {
+        return;
+    }
+    edit_line *root = p->root;
+    char search_term[33] = {0};
+    strncpy(search_term, p->search_input, p->search_cursor_position);
+
+    size_t line = 0;
+    p->search_result.count = 0;
+    p->selected_search_result = 0;
+
+    while (root != NULL) {
+        const char *content = root->content;
+        const char *search_result;
+        while ((search_result = strstr(content, search_term)) != NULL) {
+            if (search_result) {
+                size_t col = search_result - root->content;
+                append(&p->search_result, V(line, col));
+                content = search_result + 1;
+            }
+        }
+        root = root->next;
+        line++;
+    }
+    p->search_cursor_position = 0;
+    if (p->search_result.count > 0) {
+        edit_set_selected_search_result(p, 0);
+    }
+}
+
 int edit_update(terminal *term) {
     edit_process *p = (edit_process *)term->args;
     term->title = TextFormat("Edit : %s", p->node->name);
@@ -956,7 +1019,11 @@ int edit_update(terminal *term) {
         }
     }
     if (key_pressed(KEY_BACKSPACE)) {
-        edit_remove_char_at_cursor(p);
+        if (p->search_open) {
+            p->search_cursor_position--;
+        } else {
+            edit_remove_char_at_cursor(p);
+        }
     }
     if (key_pressed(KEY_DELETE)) {
         int col = fmin(p->cursor_col, p->selected_line->length);
@@ -972,12 +1039,43 @@ int edit_update(terminal *term) {
         }
     }
     if (key_pressed(KEY_ENTER)) {
-        edit_insert_new_line(p);
+        if (p->search_open) {
+            p->search_open = false;
+            edit_set_search(p);
+        } else {
+            edit_insert_new_line(p);
+        }
+    }
+
+    if (key_pressed_control(KEY_F)) {
+        p->search_open = true;
+    }
+
+    if (key_pressed_control(KEY_N)) {
+        if (p->search_result.count != 0) {
+            p->selected_search_result = (p->selected_search_result + 1) % p->search_result.count;
+            edit_set_selected_search_result(p, p->selected_search_result);
+        }
+    }
+
+    if (key_pressed_control(KEY_P)) {
+        if (p->search_result.count != 0) {
+            p->selected_search_result =
+                (p->selected_search_result == 0 ? p->search_result.count : p->selected_search_result) - 1;
+            edit_set_selected_search_result(p, p->selected_search_result);
+        }
     }
 
     int key = 0;
     while ((key = GetCharPressed()) != 0) {
-        edit_insert_char_at_cursor(p, key);
+        if (p->search_open) {
+            if (p->search_cursor_position < EDIT_MAX_SEARCH_INPUT_LENGTH) {
+                p->search_input[p->search_cursor_position++] = key;
+            }
+        } else {
+            p->search_result.count = 0;
+            edit_insert_char_at_cursor(p, key);
+        }
     }
     return 0;
 }
@@ -996,17 +1094,35 @@ void edit_render(terminal *term) {
             cursor_row = i;
         }
     }
-    cursor_row = fmin(cursor_row, MAX_LINE_COUNT_PER_SCREEN - 1);
-    const char *current_line_content = p->selected_line->content;
-    int col = fmin(p->selected_line->length, p->cursor_col);
-    Vector2 cursor_pos = S(MeasureTextEx(terminal_font, TextFormat("%.*s", col, current_line_content), font_size, 1).x,
-                           cursor_row * font_size);
-    DrawRectangleV(cursor_pos, V(font_size, font_size), WHITE);
-    DrawTextEx(terminal_font, TextFormat("%c", current_line_content[col]), cursor_pos, font_size, 1, BLACK);
+    if (!p->search_open) {
+        cursor_row = fmin(cursor_row, MAX_LINE_COUNT_PER_SCREEN - 1);
+        const char *current_line_content = p->selected_line->content;
+        int col = fmin(p->selected_line->length, p->cursor_col);
+        Vector2 cursor_pos =
+            S(MeasureTextEx(terminal_font, TextFormat("%.*s", col, current_line_content), font_size, 1).x,
+              cursor_row * font_size);
+        DrawRectangleV(cursor_pos, V(font_size, font_size), WHITE);
+        DrawTextEx(terminal_font, TextFormat("%c", current_line_content[col]), cursor_pos, font_size, 1, BLACK);
+    } else {
+        Vector2 size = {WIDTH * 3 / 4.f, 100};
+        Vector2 center = {(WIDTH - size.x) / 2, (HEIGHT - size.y) / 2};
+        Rectangle rec = {center.x, center.y, size.x, size.y};
+        Rectangle outer = {rec.x - 4, rec.y - 4, rec.width + 8, rec.height + 8};
+        DrawRectangleRec(outer, WHITE);
+        DrawRectangleRec(rec, BLACK);
+        DrawTextEx(terminal_font, TextFormat("%.*s", p->search_cursor_position, p->search_input),
+                   (Vector2){rec.x + 16, rec.y + 24}, font_size * 2, 1, WHITE);
+    }
 
     // Tooltip
     Vector2 tooltip_position = S(0, font_size * MAX_LINE_COUNT_PER_SCREEN);
-    DrawTextEx(terminal_font, "[C-s] Save [C-c] Exit", tooltip_position, font_size, 1, WHITE);
+    const char *tooltip_content;
+    if (p->search_result.count == 0) {
+        tooltip_content = "[C-s] Save [C-c] Exit [C-f] Search";
+    } else {
+        tooltip_content = TextFormat("Search: %zu [C-n] Next [C-p] Previous", p->search_result.count);
+    }
+    DrawTextEx(terminal_font, tooltip_content, tooltip_position, font_size, 1, WHITE);
 
     if (p->tooltip_info) {
         int tooltip_info_length = MeasureTextEx(terminal_font, p->tooltip_info, font_size, 1).x;
@@ -1154,13 +1270,14 @@ int exec_init(terminal *t, int argc, const char **argv) {
 
     t->render_not_ready = true;
     t->args = p;
+    free((void *)program);
     return 0;
 }
 
 int exec_update(terminal *term) {
     exec_process *p = (exec_process *)term->args;
     if (term->process_should_exit) {
-        destroy_interpreter();
+        interpreter_destroy();
         free((void *)p->filename);
         return 1;
     }
@@ -1168,6 +1285,7 @@ int exec_update(terminal *term) {
     for (int i = 0; i < 100000; i++) {
         if (!step_program()) {
             free((void *)p->filename);
+            interpreter_destroy();
             printf("Execution took %f\n", GetTime() - exec_start);
             return 1;
         }
@@ -1960,7 +2078,7 @@ int main() {
                     active_term->input_cursor = strlen(active_term->input);
                     active_term->history_ptr++;
                 }
-                active_term->scroll_offset = fmax(0, active_term->log_count - MAX_LINE_COUNT_PER_SCREEN);
+                // active_term->scroll_offset = fmax(0, active_term->log_count - MAX_LINE_COUNT_PER_SCREEN);
             }
             if (key_pressed_control(KEY_DOWN)) {
                 active_term->scroll_offset =
@@ -1975,7 +2093,7 @@ int main() {
                     active_term->history_ptr = 0;
                     active_term->input_cursor = 0;
                 }
-                active_term->scroll_offset = fmax(0, active_term->log_count - MAX_LINE_COUNT_PER_SCREEN);
+                // active_term->scroll_offset = fmax(0, active_term->log_count - MAX_LINE_COUNT_PER_SCREEN);
             }
             if (key_pressed(KEY_TAB)) {
                 terminal_autocomplete_input(active_term);

@@ -172,9 +172,6 @@ void print_program_bytecode() {
     global_interpreter->ip = prev_ip;
 }
 
-#include <stdio.h>
-#include <string.h>
-
 void int_to_str(int n, char *result) {
     int i = 0;
     int neg = n < 0;
@@ -346,7 +343,7 @@ token next(const char *input) {
     return result;
 }
 
-#define MAX_TOKENS 2048
+#define MAX_TOKENS 1024 * 1024
 token tokens[MAX_TOKENS] = {0};
 size_t token_count = 0;
 size_t parser_reader = 0;
@@ -437,14 +434,14 @@ int tok_to_num(token *tok) {
 
 size_t emit_opcode(opcode_type type) {
     size_t prev = global_interpreter->current_function->body.count;
-    append(&global_interpreter->current_function->body, type);
+    arena_append(&global_interpreter->current_function->body, type);
     return prev;
 }
 
 size_t emit_word(uint16_t byte) {
     size_t prev = global_interpreter->current_function->body.count;
-    append(&global_interpreter->current_function->body, byte & 0xFF);
-    append(&global_interpreter->current_function->body, (byte >> 8) & 0xFF);
+    arena_append(&global_interpreter->current_function->body, byte & 0xFF);
+    arena_append(&global_interpreter->current_function->body, (byte >> 8) & 0xFF);
     return prev;
 }
 
@@ -456,7 +453,7 @@ uint16_t read_word() {
 }
 
 int emit_value(value v) {
-    append(&global_interpreter->values, v);
+    arena_append(&global_interpreter->values, v);
     return global_interpreter->values.count - 1;
 }
 
@@ -769,11 +766,11 @@ void compile_statement() {
         expect(TOKEN_LPAREN);
         while (!peek_type(TOKEN_RPAREN) && !peek_type(TOKEN_EOF)) {
             token *arg = expect(TOKEN_IDENTIFIER);
-            append(&new_func.args, tok_to_str(arg));
+            arena_append(&new_func.args, tok_to_str(arg));
         }
         expect(TOKEN_RPAREN);
         expect(TOKEN_SEMICOLON);
-        append(&global_interpreter->bytecode, new_func);
+        arena_append(&global_interpreter->bytecode, new_func);
         global_interpreter->current_function =
             &global_interpreter->bytecode.items[global_interpreter->bytecode.count - 1];
         {
@@ -953,12 +950,12 @@ long long timeInMilliseconds(void) {
 
 // Externals
 
-bool interpreter_init(const char *src, void (*print_fn)(const char *), void (*append_fn)(const char *)) {
+bool interpreter_init(const char *src, void (*print_fn)(const char *), void (*arena_append_fn)(const char *)) {
     interpreter_arena = arena_default();
     global_interpreter = arena_alloc(interpreter_arena, sizeof(*global_interpreter));
     memset(global_interpreter, 0, sizeof(*global_interpreter));
     global_interpreter->print_fn = print_fn == NULL ? default_print : print_fn;
-    global_interpreter->append_print_fn = append_fn == NULL ? default_print : append_fn;
+    global_interpreter->append_print_fn = arena_append_fn == NULL ? default_print : arena_append_fn;
     parser_reader = 0;
     token_count = 0;
     // TODO: Should not exit on first error
@@ -967,14 +964,14 @@ bool interpreter_init(const char *src, void (*print_fn)(const char *), void (*ap
         if (error_code != -1) {
             interpreter_log("\nexit from error from line %d\n", error_line);
         }
-        destroy_interpreter();
+        interpreter_destroy();
         return false;
     }
     register_std_lib();
     lexical_analysis(src);
 
     function_code main = {.name = "main"};
-    append(&global_interpreter->bytecode, main);
+    arena_append(&global_interpreter->bytecode, main);
     global_interpreter->current_function = &global_interpreter->bytecode.items[0];
 
     if (!peek_type(TOKEN_EOF)) {
@@ -996,19 +993,41 @@ bool step_bytecode() {
         case OPCODE_CONSTANT_STRING: {
             uint16_t index = read_word();
             value value = global_interpreter->values.items[index];
-            append(&global_interpreter->stack, value);
+            arena_append(&global_interpreter->stack, value);
             return true;
         } break;
         case OPCODE_CONSTANT_NUMBER: {
             uint16_t v = read_word();
             value res = {.type = VAL_NUM, .as.number = v};
-            append(&global_interpreter->stack, res);
+            arena_append(&global_interpreter->stack, res);
             return true;
         } break;
         case OPCODE_EOF:
             return false;
         case OPCODE_ADD: {
-            basic_push_int(basic_pop_value_num() + basic_pop_value_num());
+            value b = pop(&global_interpreter->stack);
+            value a = pop(&global_interpreter->stack);
+            if (a.type == VAL_NUM && b.type == VAL_NUM) {
+                basic_push_int(a.as.number + b.as.number);
+            } else {
+                char s1[255] = {0};
+                char s2[255] = {0};
+                if (a.type == VAL_NUM) {
+                    int_to_str(a.as.number, s1);
+                } else {
+                    strncpy(s1, a.as.string, sizeof(s1));
+                }
+                if (b.type == VAL_NUM) {
+                    int_to_str(b.as.number, s2);
+                } else {
+                    strncpy(s2, b.as.string, sizeof(s2));
+                }
+                char *result = arena_alloc(interpreter_arena, strlen(s1) + strlen(s2) + 1);
+                result[0] = '\0';
+                strcat(result, s1);
+                strcat(result, s2);
+                basic_push_string(result);
+            }
             return true;
         }
         case OPCODE_MULT: {
@@ -1089,7 +1108,7 @@ bool step_bytecode() {
                 }
                 return_frame frame = {global_interpreter->current_function, global_interpreter->ip,
                                       global_interpreter->sp, previous_symbol_count};
-                append(&global_interpreter->return_stack, frame);
+                arena_append(&global_interpreter->return_stack, frame);
                 global_interpreter->current_function = function->as.funcdecl.body;
                 global_interpreter->ip = 0;
                 global_interpreter->sp = global_interpreter->stack.count;
@@ -1175,7 +1194,7 @@ bool step_program() {
     return step_bytecode();
 }
 
-void destroy_interpreter() {
+void interpreter_destroy() {
     global_interpreter = NULL;
     arena_free(interpreter_arena);
     interpreter_arena = NULL;
@@ -1204,15 +1223,15 @@ void register_variable_string(const char *name, const char *value) {
 
 void basic_push_int(int result) {
     value v = {.type = VAL_NUM, .as.number = result};
-    append(&global_interpreter->stack, v);
+    arena_append(&global_interpreter->stack, v);
 }
 
 void basic_push_string(const char *s) {
     value v = {.type = VAL_STRING, .as.string = s};
-    append(&global_interpreter->stack, v);
+    arena_append(&global_interpreter->stack, v);
 }
 
-int basic_pop_value_num() {
+int16_t basic_pop_value_num() {
     value v = pop(&global_interpreter->stack);
     if (v.type != VAL_NUM) {
         ERR("Expected numeric value on top of stack");
@@ -1295,6 +1314,7 @@ int main(int argc, const char **argv) {
             break;
         last_time = new_time;
     }
+    interpreter_destroy();
     return 0;
 }
 #endif

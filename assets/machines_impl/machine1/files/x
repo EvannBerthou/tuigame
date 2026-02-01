@@ -1,5 +1,9 @@
-I = 0;
-WHILE 1;
-    PRINTN(I);
-    I = I + 1;
+FUNC COUNTDOWN(n);
+    IF n >= 0;
+        PRINTN("PREV" n);
+        COUNTDOWN(n - 1);
+        PRINTN("AFTER" n);
+    END
 END
+
+COUNTDOWN(3);
